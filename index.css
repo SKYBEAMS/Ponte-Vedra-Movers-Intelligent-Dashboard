@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* Your global styles */
+:root {
+  font-family: Inter, system-ui, Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #020617;
+  overflow: hidden;
+}
+
+.font-tech {
+  font-family: Orbitron, sans-serif;
+}
+
+.tron-grid {
+  background-image:
+    linear-gradient(rgba(14, 165, 233, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(14, 165, 233, 0.05) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+.glow-text {
+  text-shadow: 0 0 8px rgba(14, 165, 233, 0.6);
+}
+
+.glass {
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
