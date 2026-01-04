@@ -9,6 +9,7 @@ import {
   XCircle,
   MessageSquare,
   Save,
+  CalendarDays,
 } from "lucide-react";
 import { Job, JobStatus, JobFlag } from "../types";
 import { FLAG_ICONS } from "../constants";
@@ -91,6 +92,41 @@ function updateIsoTimeKeepDate(existingIso: string, hm: string, ampm: "AM" | "PM
   return local.toISOString();
 }
 
+/**
+ * ✅ NEW: date helpers (date picker -> ISO keeping time)
+ * - Date input is local "YYYY-MM-DD"
+ * - We merge it into scheduledArrival while keeping the time portion
+ */
+function toDateInputValue(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function updateIsoDateKeepTime(existingIso: string, yyyyMmDd: string): string {
+  const base = new Date(existingIso);
+  if (Number.isNaN(base.getTime())) return new Date().toISOString();
+
+  const [y, m, d] = yyyyMmDd.split("-").map((n) => Number(n));
+  if (!y || !m || !d) return existingIso;
+
+  // Keep the base time (local)
+  const local = new Date(
+    y,
+    m - 1,
+    d,
+    base.getHours(),
+    base.getMinutes(),
+    0,
+    0
+  );
+  return local.toISOString();
+}
+
 /* ✅ NEW: address -> clean label helpers for JobCard display */
 function shortPlaceLabel(input: string): string {
   const s = (input || "").trim();
@@ -119,6 +155,21 @@ function makeFromToLabel(pickup: string, dropoff: string): string {
   return `${a || "—"} → ${b || "—"}`;
 }
 
+/**
+ * ✅ NEW: validate scheduledArrival "past date" (dispatch-safe)
+ * If the job is not completed/paid and the scheduled date is before today -> warning.
+ * (We will later route these to Needs Review bucket in the queue split.)
+ */
+function isScheduledDateInPast(iso?: string): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return true; // treat invalid as "bad"
+  const now = new Date();
+  const jobDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return jobDay < today;
+}
+
 export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
   if (!job) return null;
 
@@ -133,9 +184,13 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
   // ✅ Route Path truth fields
   const initialRoute = splitFromTo(job.fromTo);
   const [pickupAddress, setPickupAddress] = useState<string>(job.pickupAddress ?? initialRoute.from);
-  const [dropoffAddress, setDropoffAddress] = useState<string>(
-    job.dropoffAddress ?? initialRoute.to
-  );
+  const [dropoffAddress, setDropoffAddress] = useState<string>(job.dropoffAddress ?? initialRoute.to);
+
+  // ✅ NEW: Date picker state (derived from scheduledArrival)
+  const [dateValue, setDateValue] = useState<string>(() => {
+    const iso = job.scheduledArrival || new Date().toISOString();
+    return toDateInputValue(iso);
+  });
 
   useEffect(() => {
     setDraft(job);
@@ -148,6 +203,9 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
     const route = splitFromTo(job.fromTo);
     setPickupAddress(job.pickupAddress ?? route.from);
     setDropoffAddress(job.dropoffAddress ?? route.to);
+
+    const iso = job.scheduledArrival || new Date().toISOString();
+    setDateValue(toDateInputValue(iso));
   }, [job]);
 
   const timeHm = useMemo(() => {
@@ -168,9 +226,10 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
       !draft.customerPhone?.trim() ||
       !pickupAddress.trim() ||
       !dropoffAddress.trim() ||
-      !timeDerived.trim()
+      !timeDerived.trim() ||
+      !dateValue.trim()
     );
-  }, [draft.customerName, draft.customerPhone, pickupAddress, dropoffAddress, timeDerived]);
+  }, [draft.customerName, draft.customerPhone, pickupAddress, dropoffAddress, timeDerived, dateValue]);
 
   const flagWarning = useMemo(() => {
     const flags = draft.flags || [];
@@ -183,10 +242,28 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
     return highRisk || comboRisk;
   }, [draft.flags]);
 
-  const warningActive = useMemo(() => missingBasics || flagWarning, [missingBasics, flagWarning]);
+  // ✅ NEW: Past/invalid date warning (pre-NeedsReview bucket)
+  const dateProblem = useMemo(() => {
+    const iso = draft.scheduledArrival || (dateValue ? updateIsoDateKeepTime(new Date().toISOString(), dateValue) : "");
+    const bad =
+      !iso ||
+      Number.isNaN(new Date(iso).getTime()) ||
+      isScheduledDateInPast(iso);
+
+    const terminal =
+      draft.status === JobStatus.COMPLETED || draft.status === JobStatus.PAID;
+
+    return !terminal && bad;
+  }, [draft.scheduledArrival, draft.status, dateValue]);
+
+  const warningActive = useMemo(
+    () => missingBasics || flagWarning || dateProblem,
+    [missingBasics, flagWarning, dateProblem]
+  );
 
   const warningNote = useMemo(() => {
-    if (missingBasics) return "Missing required job details (name, phone, from/to, time).";
+    if (missingBasics) return "Missing required job details (name, phone, from/to, date, time).";
+    if (dateProblem) return "Scheduled date is in the past (or invalid) — needs confirmation.";
     if (!flagWarning) return "";
     const flags = draft.flags || [];
     const reasons: string[] = [];
@@ -194,7 +271,7 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
     if (flags.includes(JobFlag.MULTIPLE_TRUCKS)) reasons.push("Multiple trucks");
     if (flags.includes(JobFlag.PIANO)) reasons.push("Piano");
     return reasons.length ? `Warning flags: ${reasons.join(" + ")}.` : "Warning flags selected.";
-  }, [missingBasics, flagWarning, draft.flags]);
+  }, [missingBasics, dateProblem, flagWarning, draft.flags]);
 
   const toggleFlag = (flag: JobFlag) => {
     setDraft((prev) => {
@@ -207,14 +284,22 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
   const save = () => {
     const nextStatus = draft.status ?? JobStatus.READY;
 
-    // ✅ NEW: always save a clean label for card display
+    // ✅ Always save a clean label for card display
     const composedFromTo = makeFromToLabel(pickupAddress, dropoffAddress);
 
-    // ✅ scheduledArrival is source of truth; update time while keeping its date
-    const nextScheduledArrival =
-      timeHm && draft.scheduledArrival
-        ? updateIsoTimeKeepDate(draft.scheduledArrival, timeHm, ampm)
-        : draft.scheduledArrival || new Date().toISOString();
+    // ✅ scheduledArrival is source of truth:
+    // 1) Ensure we have a base ISO
+    // 2) Apply date picker (keep time)
+    // 3) Apply time editor (keep date)
+    let nextScheduledArrival = draft.scheduledArrival || new Date().toISOString();
+
+    if (dateValue) {
+      nextScheduledArrival = updateIsoDateKeepTime(nextScheduledArrival, dateValue);
+    }
+
+    if (timeHm) {
+      nextScheduledArrival = updateIsoTimeKeepDate(nextScheduledArrival, timeHm, ampm);
+    }
 
     onUpdateJob({
       ...draft,
@@ -257,9 +342,31 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
               className="w-full text-2xl font-bold text-white glow-text bg-transparent outline-none border-b border-white/10 focus:border-sky-400/50 pb-1"
             />
 
-            <div className="flex items-center space-x-2 text-white/60 text-sm mt-2">
+            {/* Date + Time row */}
+            <div className="flex flex-wrap items-center gap-2 text-white/60 text-sm mt-2">
               <Clock size={14} className="text-sky-400" />
               <span className="text-white/60">Scheduled:</span>
+
+              {/* ✅ NEW: Date picker */}
+              <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2">
+                <CalendarDays size={14} className="text-sky-400" />
+                <input
+                  type="date"
+                  value={dateValue}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setDateValue(next);
+
+                    // Keep draft.scheduledArrival in sync immediately (truth field)
+                    setDraft((p) => {
+                      const baseIso = p.scheduledArrival || new Date().toISOString();
+                      const nextIso = next ? updateIsoDateKeepTime(baseIso, next) : baseIso;
+                      return { ...p, scheduledArrival: nextIso };
+                    });
+                  }}
+                  className="bg-transparent outline-none text-white/80"
+                />
+              </div>
 
               <input
                 value={timeDigits}
@@ -359,7 +466,7 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
                     key={flag}
                     type="button"
                     onClick={() => toggleFlag(flag)}
-                    className={`px-3 py-2 rounded-xl border text-xs font-bold tracking-wider flex items-center gap-2 transition-all 
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold tracking-wider flex items-center gap-2 transition-all  
                       ${
                         active
                           ? "bg-sky-500/20 border-sky-400/40 text-white"
