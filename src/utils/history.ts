@@ -1,17 +1,19 @@
-// src/utils/history.ts
-export function deepClone<T>(obj: T): T {
-  return JSON.parse(JSON.stringify(obj));
-}
+export type Snapshot<T> = {
+  state: T;
+  ts: number;
+};
 
-export function pushHistory<T>(history: T[], state: T, max = 60): T[] {
-  const next = [...history, deepClone(state)];
-  if (next.length > max) next.shift();
+const MAX_HISTORY = 50;
+
+export function pushHistory<T>(prev: Snapshot<T>[], state: T): Snapshot<T>[] {
+  const next = [...prev, { state, ts: Date.now() }];
+  if (next.length > MAX_HISTORY) next.shift();
   return next;
 }
 
-export function popHistory<T>(history: T[]): { nextHistory: T[]; last: T | null } {
-  if (history.length === 0) return { nextHistory: history, last: null };
-  const nextHistory = history.slice(0, -1);
-  const last = history[history.length - 1];
+export function popHistory<T>(prev: Snapshot<T>[]) {
+  if (prev.length === 0) return { nextHistory: prev, last: null as T | null };
+  const nextHistory = prev.slice(0, -1);
+  const last = prev[prev.length - 1].state;
   return { nextHistory, last };
 }

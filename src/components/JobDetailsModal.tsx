@@ -1,14 +1,240 @@
-import React from "react";
-import { ClipboardList, Clock, Phone, MapPin, AlertCircle, XCircle, MessageSquare } from "lucide-react";
-import { Job } from "../types";
+// ✅ src/components/JobDetailsModal.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  ClipboardList,
+  Clock,
+  Phone,
+  MapPin,
+  AlertCircle,
+  XCircle,
+  MessageSquare,
+  Save,
+} from "lucide-react";
+import { Job, JobStatus, JobFlag } from "../types";
+import { FLAG_ICONS } from "../constants";
 
 type Props = {
   job: Job | null;
   onClose: () => void;
+  onUpdateJob: (job: Job) => void;
 };
 
-export default function JobDetailsModal({ job, onClose }: Props) {
+// ---- time helpers (digits -> "h:mm", AM/PM dropdown) ----
+function parseTimeDigitsToHm(digitsRaw: string): { hm: string; valid: boolean } {
+  const digits = (digitsRaw || "").replace(/\D/g, "").slice(0, 4);
+
+  if (!digits) return { hm: "", valid: false };
+
+  if (digits.length <= 2) {
+    const h = Number(digits);
+    if (!h || h < 1 || h > 12) return { hm: "", valid: false };
+    return { hm: `${h}:00`, valid: true };
+  }
+
+  if (digits.length === 3) {
+    const h = Number(digits.slice(0, 1));
+    const m = Number(digits.slice(1));
+    if (!h || h < 1 || h > 12) return { hm: "", valid: false };
+    if (m < 0 || m > 59) return { hm: "", valid: false };
+    return { hm: `${h}:${String(m).padStart(2, "0")}`, valid: true };
+  }
+
+  const h = Number(digits.slice(0, 2));
+  const m = Number(digits.slice(2));
+  if (!h || h < 1 || h > 12) return { hm: "", valid: false };
+  if (m < 0 || m > 59) return { hm: "", valid: false };
+  return { hm: `${h}:${String(m).padStart(2, "0")}`, valid: true };
+}
+
+function splitFromTo(fromTo?: string) {
+  const s = (fromTo || "").trim();
+  if (!s) return { from: "", to: "" };
+  const parts = s.split("→").map((p) => p.trim());
+  if (parts.length >= 2) return { from: parts[0], to: parts.slice(1).join(" → ") };
+  const dash = s.split("-").map((p) => p.trim());
+  if (dash.length >= 2) return { from: dash[0], to: dash.slice(1).join(" - ") };
+  return { from: s, to: "" };
+}
+
+function to24Hour(hm: string, ampm: "AM" | "PM"): { hour24: number; minute: number } | null {
+  const [hRaw, mRaw] = hm.split(":");
+  const h = Number(hRaw);
+  const m = Number(mRaw);
+  if (!h || h < 1 || h > 12) return null;
+  if (Number.isNaN(m) || m < 0 || m > 59) return null;
+
+  let hour24 = h % 12; // 12 -> 0
+  if (ampm === "PM") hour24 += 12;
+  return { hour24, minute: m };
+}
+
+/**
+ * ✅ Truth update: keep the existing scheduledArrival DATE,
+ * replace only the time (local time), then store ISO.
+ */
+function updateIsoTimeKeepDate(existingIso: string, hm: string, ampm: "AM" | "PM"): string {
+  const base = new Date(existingIso);
+  if (Number.isNaN(base.getTime())) return new Date().toISOString();
+
+  const t = to24Hour(hm, ampm);
+  if (!t) return existingIso;
+
+  const local = new Date(
+    base.getFullYear(),
+    base.getMonth(),
+    base.getDate(),
+    t.hour24,
+    t.minute,
+    0,
+    0
+  );
+  return local.toISOString();
+}
+
+/* ✅ NEW: address -> clean label helpers for JobCard display */
+function shortPlaceLabel(input: string): string {
+  const s = (input || "").trim();
+  if (!s) return "";
+
+  // Already a short label (like "PV", "Jax Bch", "St Aug")
+  if (s.length <= 12 && !/\d/.test(s) && !s.includes(",")) return s;
+
+  // "City, ST ..." -> "City"
+  const firstPart = s.split(",")[0]?.trim();
+  if (firstPart && firstPart.length <= 12) return firstPart;
+
+  // fallback: last word(s)
+  const words = (firstPart || s).split(/\s+/).filter(Boolean);
+  const last = words[words.length - 1] || s;
+  const secondLast = words[words.length - 2] || "";
+  const candidate = (secondLast ? `${secondLast} ${last}` : last).trim();
+
+  return candidate.length > 12 ? candidate.slice(0, 12) : candidate;
+}
+
+function makeFromToLabel(pickup: string, dropoff: string): string {
+  const a = shortPlaceLabel(pickup);
+  const b = shortPlaceLabel(dropoff);
+  if (!a && !b) return "";
+  return `${a || "—"} → ${b || "—"}`;
+}
+
+export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
   if (!job) return null;
+
+  const [draft, setDraft] = useState<Job>(job);
+
+  const initialAmPm = (job.time || "").toUpperCase().includes("PM") ? "PM" : "AM";
+  const [ampm, setAmpm] = useState<"AM" | "PM">(initialAmPm);
+
+  const initialDigits = (job.time || "").replace(/\D/g, "").slice(0, 4);
+  const [timeDigits, setTimeDigits] = useState<string>(initialDigits);
+
+  // ✅ Route Path truth fields
+  const initialRoute = splitFromTo(job.fromTo);
+  const [pickupAddress, setPickupAddress] = useState<string>(job.pickupAddress ?? initialRoute.from);
+  const [dropoffAddress, setDropoffAddress] = useState<string>(
+    job.dropoffAddress ?? initialRoute.to
+  );
+
+  useEffect(() => {
+    setDraft(job);
+
+    const nextAmPm = (job.time || "").toUpperCase().includes("PM") ? "PM" : "AM";
+    setAmpm(nextAmPm);
+
+    setTimeDigits((job.time || "").replace(/\D/g, "").slice(0, 4));
+
+    const route = splitFromTo(job.fromTo);
+    setPickupAddress(job.pickupAddress ?? route.from);
+    setDropoffAddress(job.dropoffAddress ?? route.to);
+  }, [job]);
+
+  const timeHm = useMemo(() => {
+    const { hm, valid } = parseTimeDigitsToHm(timeDigits);
+    return valid ? hm : "";
+  }, [timeDigits]);
+
+  const timeDerived = useMemo(() => {
+    if (!timeHm) return "";
+    return `${timeHm} ${ampm}`;
+  }, [timeHm, ampm]);
+
+  const timeValid = useMemo(() => parseTimeDigitsToHm(timeDigits).valid, [timeDigits]);
+
+  const missingBasics = useMemo(() => {
+    return (
+      !draft.customerName?.trim() ||
+      !draft.customerPhone?.trim() ||
+      !pickupAddress.trim() ||
+      !dropoffAddress.trim() ||
+      !timeDerived.trim()
+    );
+  }, [draft.customerName, draft.customerPhone, pickupAddress, dropoffAddress, timeDerived]);
+
+  const flagWarning = useMemo(() => {
+    const flags = draft.flags || [];
+    const highRisk =
+      flags.includes(JobFlag.PACKING) ||
+      flags.includes(JobFlag.MULTIPLE_TRUCKS) ||
+      flags.includes(JobFlag.PIANO);
+
+    const comboRisk = flags.includes(JobFlag.PACKING) && flags.includes(JobFlag.MULTIPLE_TRUCKS);
+    return highRisk || comboRisk;
+  }, [draft.flags]);
+
+  const warningActive = useMemo(() => missingBasics || flagWarning, [missingBasics, flagWarning]);
+
+  const warningNote = useMemo(() => {
+    if (missingBasics) return "Missing required job details (name, phone, from/to, time).";
+    if (!flagWarning) return "";
+    const flags = draft.flags || [];
+    const reasons: string[] = [];
+    if (flags.includes(JobFlag.PACKING)) reasons.push("Packing");
+    if (flags.includes(JobFlag.MULTIPLE_TRUCKS)) reasons.push("Multiple trucks");
+    if (flags.includes(JobFlag.PIANO)) reasons.push("Piano");
+    return reasons.length ? `Warning flags: ${reasons.join(" + ")}.` : "Warning flags selected.";
+  }, [missingBasics, flagWarning, draft.flags]);
+
+  const toggleFlag = (flag: JobFlag) => {
+    setDraft((prev) => {
+      const has = prev.flags?.includes(flag);
+      const nextFlags = has ? prev.flags.filter((f) => f !== flag) : [...(prev.flags || []), flag];
+      return { ...prev, flags: nextFlags };
+    });
+  };
+
+  const save = () => {
+    const nextStatus = draft.status ?? JobStatus.READY;
+
+    // ✅ NEW: always save a clean label for card display
+    const composedFromTo = makeFromToLabel(pickupAddress, dropoffAddress);
+
+    // ✅ scheduledArrival is source of truth; update time while keeping its date
+    const nextScheduledArrival =
+      timeHm && draft.scheduledArrival
+        ? updateIsoTimeKeepDate(draft.scheduledArrival, timeHm, ampm)
+        : draft.scheduledArrival || new Date().toISOString();
+
+    onUpdateJob({
+      ...draft,
+      status: nextStatus,
+      time: timeDerived || draft.time,
+      scheduledArrival: nextScheduledArrival,
+
+      // ✅ Truth fields stored (full strings)
+      pickupAddress: pickupAddress.trim(),
+      dropoffAddress: dropoffAddress.trim(),
+
+      // ✅ Display label (short)
+      fromTo: composedFromTo,
+
+      warning: warningActive,
+      warningNote: warningActive ? warningNote : undefined,
+    });
+
+    onClose();
+  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
@@ -19,13 +245,51 @@ export default function JobDetailsModal({ job, onClose }: Props) {
           <div>
             <div className="flex items-center space-x-2 text-sky-400 mb-2">
               <ClipboardList size={20} />
-              <span className="font-tech text-xs font-bold tracking-[0.2em] uppercase">Job Specifications</span>
+              <span className="font-tech text-xs font-bold tracking-[0.2em] uppercase">
+                Job Specifications
+              </span>
             </div>
-            <h2 className="text-2xl font-bold text-white glow-text">{job.customerName}</h2>
-            <div className="flex items-center space-x-2 text-white/60 text-sm mt-1">
+
+            <input
+              value={draft.customerName}
+              onChange={(e) => setDraft((p) => ({ ...p, customerName: e.target.value }))}
+              placeholder="Customer Name"
+              className="w-full text-2xl font-bold text-white glow-text bg-transparent outline-none border-b border-white/10 focus:border-sky-400/50 pb-1"
+            />
+
+            <div className="flex items-center space-x-2 text-white/60 text-sm mt-2">
               <Clock size={14} className="text-sky-400" />
-              <span>Scheduled: {job.time}</span>
+              <span className="text-white/60">Scheduled:</span>
+
+              <input
+                value={timeDigits}
+                onChange={(e) => setTimeDigits(e.target.value)}
+                placeholder="e.g. 930"
+                className="w-[120px] bg-transparent outline-none border-b border-white/10 focus:border-sky-400/50 text-white/80"
+                inputMode="numeric"
+              />
+
+              <select
+                value={ampm}
+                onChange={(e) => setAmpm(e.target.value as "AM" | "PM")}
+                className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-white/80 outline-none focus:border-sky-400/40"
+              >
+                <option value="AM">AM</option>
+                <option value="PM">PM</option>
+              </select>
+
+              <span className={`text-xs ml-2 ${timeValid ? "text-white/70" : "text-amber-300"}`}>
+                {timeValid ? timeDerived : "Invalid time"}
+              </span>
             </div>
+
+            <div className="mt-2 text-[10px] uppercase tracking-widest text-white/50">
+              Status: <span className="text-white/80 font-bold">{draft.status}</span>
+            </div>
+
+            {warningActive && (
+              <div className="mt-2 text-xs font-bold text-amber-300/90">⚠ {warningNote}</div>
+            )}
           </div>
 
           <button
@@ -39,38 +303,106 @@ export default function JobDetailsModal({ job, onClose }: Props) {
         <div className="p-6 space-y-6">
           <div className="grid grid-cols-2 gap-6">
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-sky-400 uppercase tracking-widest">Customer Phone</label>
+              <label className="text-[10px] font-bold text-sky-400 uppercase tracking-widest">
+                Customer Phone
+              </label>
               <div className="flex items-center space-x-2 text-white bg-white/5 p-3 rounded-xl border border-white/10">
                 <Phone size={16} className="text-sky-400" />
-                <span className="font-medium">{job.customerPhone}</span>
+                <input
+                  value={draft.customerPhone}
+                  onChange={(e) => setDraft((p) => ({ ...p, customerPhone: e.target.value }))}
+                  placeholder="(904) 555-0000"
+                  className="w-full bg-transparent outline-none text-white"
+                />
               </div>
             </div>
 
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-sky-400 uppercase tracking-widest">Route Path</label>
-              <div className="flex items-center space-x-2 text-white bg-white/5 p-3 rounded-xl border border-white/10">
-                <MapPin size={16} className="text-sky-400" />
-                <span className="font-medium">{job.fromTo}</span>
+              <label className="text-[10px] font-bold text-sky-400 uppercase tracking-widest">
+                Route Path
+              </label>
+
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2 text-white bg-white/5 p-3 rounded-xl border border-white/10">
+                  <MapPin size={16} className="text-sky-400" />
+                  <input
+                    value={pickupAddress}
+                    onChange={(e) => setPickupAddress(e.target.value)}
+                    placeholder="From address / area"
+                    className="w-full bg-transparent outline-none text-white"
+                  />
+                </div>
+
+                <div className="flex items-center space-x-2 text-white bg-white/5 p-3 rounded-xl border border-white/10">
+                  <MapPin size={16} className="text-sky-400" />
+                  <input
+                    value={dropoffAddress}
+                    onChange={(e) => setDropoffAddress(e.target.value)}
+                    placeholder="To address / area"
+                    className="w-full bg-transparent outline-none text-white"
+                  />
+                </div>
               </div>
             </div>
           </div>
 
+          {/* Flags */}
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-sky-400 uppercase tracking-widest">
+              Flags
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {(Object.values(JobFlag) as JobFlag[]).map((flag) => {
+                const active = draft.flags?.includes(flag);
+                return (
+                  <button
+                    key={flag}
+                    type="button"
+                    onClick={() => toggleFlag(flag)}
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold tracking-wider flex items-center gap-2 transition-all 
+                      ${
+                        active
+                          ? "bg-sky-500/20 border-sky-400/40 text-white"
+                          : "bg-white/5 border-white/10 text-white/70 hover:bg-white/10"
+                      }`}
+                    title={flag}
+                  >
+                    <span className="opacity-90">{FLAG_ICONS?.[flag]}</span>
+                    <span>{flag}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Notes */}
           <div className="space-y-2">
             <label className="text-[10px] font-bold text-sky-400 uppercase tracking-widest flex items-center">
               <AlertCircle size={14} className="mr-2" /> Dispatcher Notes
             </label>
-            <div className="bg-white/5 p-4 rounded-xl border border-white/10 text-white/80 text-sm leading-relaxed italic">
-              {job.notes || "No special instructions provided for this contract."}
-            </div>
+            <textarea
+              value={draft.notes || ""}
+              onChange={(e) => setDraft((p) => ({ ...p, notes: e.target.value }))}
+              placeholder="Add instructions, access notes, special items, etc."
+              className="w-full min-h-[110px] bg-white/5 p-4 rounded-xl border border-white/10 text-white/80 text-sm leading-relaxed outline-none focus:border-sky-400/40"
+            />
           </div>
         </div>
 
-        <div className="p-6 bg-white/5 border-t border-white/5 flex space-x-3">
+        <div className="p-6 bg-white/5 border-t border-white/5 flex items-center gap-3">
           <button
-            onClick={onClose}
+            onClick={save}
             className="flex-1 bg-sky-600 hover:bg-sky-500 text-white font-bold py-3 rounded-xl transition-all shadow-[0_0_20px_rgba(14,165,233,0.3)] flex items-center justify-center space-x-2"
           >
-            <span>Acknowledge & Close</span>
+            <Save size={18} />
+            <span>Save</span>
+          </button>
+
+          <button
+            onClick={onClose}
+            className="px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/70 hover:text-white transition-all font-bold"
+          >
+            Cancel
           </button>
 
           <button className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/60 hover:text-white transition-all">

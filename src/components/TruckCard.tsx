@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ClipboardList,
   PhoneCall,
-  Signal,
   Truck as TruckIcon,
   Users,
 } from "lucide-react";
@@ -23,7 +22,7 @@ type TruckCardProps = {
     type: "employee" | "job",
     sourceTruckId?: string
   ) => void;
-  onDragEnd?: (e: React.DragEvent) => void; // NEW (optional so nothing breaks)
+  onDragEnd?: (e: React.DragEvent) => void; // optional so nothing breaks
   onViewJobDetails: (job: Job) => void;
 };
 
@@ -38,6 +37,10 @@ export default function TruckCard({
 }: TruckCardProps) {
   const [isOver, setIsOver] = useState(false);
   const isFull = crew.length >= truck.capacity;
+
+  // ✅ Truck yellow rules (ONLY these)
+  const fuelLow = truck.fuelLevel < 30;
+  const truckWarning = !truck.ready || fuelLow;
 
   // Lead = highest rank
   const leadEmployee = useMemo(() => {
@@ -58,34 +61,65 @@ export default function TruckCard({
     onDrop(e, truck.id);
   };
 
+  // Base border color (normal vs warning)
+  const baseBorder = truckWarning ? "border-amber-500/35" : "border-white/10";
+
+  // When dragging over:
+  // - full crew blocks (red)
+  // - otherwise highlight blue
+  // - if truck is already warning, keep a subtle amber influence
+  const overBorder = isFull
+    ? "border-rose-500/50 shadow-[0_0_30px_rgba(244,63,94,0.2)]"
+    : truckWarning
+    ? "border-amber-400/70 shadow-[0_0_30px_rgba(245,158,11,0.18)] scale-[1.02]"
+    : "border-sky-400 shadow-[0_0_30px_rgba(14,165,233,0.3)] scale-[1.02]";
+
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`glass border transition-all duration-300 rounded-2xl flex flex-col min-h-[220px] overflow-hidden ${
-        isOver
-          ? isFull
-            ? "border-rose-500/50 shadow-[0_0_30px_rgba(244,63,94,0.2)]"
-            : "border-sky-400 shadow-[0_0_30px_rgba(14,165,233,0.3)] scale-[1.02]"
-          : "border-white/10"
+        isOver ? overBorder : baseBorder
+      } ${
+        truckWarning && !isOver
+          ? "shadow-[0_0_18px_rgba(245,158,11,0.10)]"
+          : ""
       }`}
     >
       <div className="bg-white/5 p-3 flex items-center justify-between border-b border-white/5">
         <div className="flex items-center space-x-2">
-          <TruckIcon size={18} className={truck.ready ? "text-sky-400" : "text-white/30"} />
+          <TruckIcon
+            size={18}
+            className={
+              truckWarning
+                ? "text-amber-300"
+                : truck.ready
+                ? "text-sky-400"
+                : "text-white/30"
+            }
+          />
           <h2 className="font-tech text-sm font-bold text-white uppercase tracking-wider">
             {truck.name}
           </h2>
+
+          {/* Optional tiny warning chip */}
+          {truckWarning && (
+            <span className="ml-2 text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded border border-amber-400/30 bg-amber-500/10 text-amber-300">
+              Warning
+            </span>
+          )}
         </div>
 
         <div className="flex items-center space-x-3">
           <div className="flex flex-col items-end">
-            <span className="text-[9px] text-white/40 uppercase font-bold">Fuel</span>
+            <span className="text-[9px] text-white/40 uppercase font-bold">
+              Fuel
+            </span>
             <div className="w-16 h-1 bg-white/10 rounded-full mt-0.5 overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-1000 ${
-                  truck.fuelLevel < 30 ? "bg-rose-500" : "bg-sky-500"
+                  fuelLow ? "bg-rose-500" : "bg-sky-500"
                 }`}
                 style={{ width: `${truck.fuelLevel}%` }}
               />
@@ -98,8 +132,13 @@ export default function TruckCard({
                 ? "text-emerald-400 bg-emerald-400/10"
                 : "text-rose-400 bg-rose-400/10"
             }`}
+            title={truck.ready ? "Ready" : "Not ready"}
           >
-            {truck.ready ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+            {truck.ready ? (
+              <CheckCircle2 size={12} />
+            ) : (
+              <AlertCircle size={12} />
+            )}
           </div>
         </div>
       </div>
@@ -129,8 +168,10 @@ export default function TruckCard({
                 <div
                   key={person.id}
                   draggable
-                  onDragStart={(e) => onDragStart(e, person.id, "employee", truck.id)}
-                  onDragEnd={onDragEnd} // NEW
+                  onDragStart={(e) =>
+                    onDragStart(e, person.id, "employee", truck.id)
+                  }
+                  onDragEnd={onDragEnd}
                   className={`group relative h-10 w-10 rounded-full flex items-center justify-center text-xs font-bold transition-all cursor-grab active:cursor-grabbing shadow-lg shadow-sky-900/20 ${
                     isLead
                       ? "bg-sky-400 text-slate-950 border-2 border-white shadow-[0_0_15px_rgba(56,189,248,0.5)] z-10"
@@ -151,7 +192,9 @@ export default function TruckCard({
             {crew.length === 0 && (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/10 py-6">
                 <Users size={20} className="mb-1" />
-                <span className="text-[8px] uppercase tracking-tighter">Assign Crew</span>
+                <span className="text-[8px] uppercase tracking-tighter">
+                  Assign Crew
+                </span>
               </div>
             )}
           </div>
@@ -170,7 +213,7 @@ export default function TruckCard({
                   job={job}
                   compact
                   onDragStart={onDragStart}
-                  onDragEnd={onDragEnd} // NEW
+                  onDragEnd={onDragEnd}
                   onViewDetails={onViewJobDetails}
                   sourceTruckId={truck.id}
                 />
@@ -180,7 +223,9 @@ export default function TruckCard({
             {jobs.length === 0 && (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/10 py-6">
                 <ClipboardList size={20} className="mb-1" />
-                <span className="text-[8px] uppercase tracking-tighter">Drop Contract</span>
+                <span className="text-[8px] uppercase tracking-tighter">
+                  Drop Contract
+                </span>
               </div>
             )}
           </div>
@@ -189,17 +234,17 @@ export default function TruckCard({
 
       {/* Footer Flags */}
       <div className="bg-sky-950/20 p-2 px-3 border-t border-white/5 flex items-center space-x-3 overflow-x-auto no-scrollbar">
-        {truck.fuelLevel < 30 && (
+        {fuelLow && (
           <div className="flex items-center space-x-1 text-rose-400 text-[9px] font-bold whitespace-nowrap bg-rose-500/10 px-1.5 py-0.5 rounded">
             <AlertCircle size={10} />
             <span>CRITICAL FUEL</span>
           </div>
         )}
 
-        {crew.length === 0 && (
-          <div className="flex items-center space-x-1 text-amber-400 text-[9px] font-bold whitespace-nowrap bg-amber-500/10 px-1.5 py-0.5 rounded">
-            <Signal size={10} />
-            <span>ETA RISK</span>
+        {!truck.ready && (
+          <div className="flex items-center space-x-1 text-amber-300 text-[9px] font-bold whitespace-nowrap bg-amber-500/10 px-1.5 py-0.5 rounded">
+            <AlertCircle size={10} />
+            <span>SUPPLIES / READY CHECK</span>
           </div>
         )}
 

@@ -10,7 +10,7 @@ type Props = {
     type: "employee",
     sourceTruckId?: string
   ) => void;
-  onDragEnd?: (e: React.DragEvent) => void; // NEW (optional so older calls don't break)
+  onDragEnd?: (e: React.DragEvent) => void;
   sourceTruckId?: string;
 };
 
@@ -20,21 +20,50 @@ export default function EmployeeCard({
   onDragEnd,
   sourceTruckId,
 }: Props) {
+  const isScheduledOff = employee.scheduledOff === true;
+
   return (
     <div
-      draggable
-      onDragStart={(e) => onDragStart(e, employee.id, "employee", sourceTruckId)}
-      onDragEnd={onDragEnd} // NEW
-      className="group relative mb-3 p-3 glass border border-white/10 rounded-xl hover:border-sky-400/50 hover:shadow-[0_0_15px_rgba(14,165,233,0.15)] transition-all duration-300 cursor-grab active:cursor-grabbing active:scale-95"
+      draggable={!isScheduledOff}
+      onDragStart={(e) => {
+        if (isScheduledOff) return;
+        onDragStart(e, employee.id, "employee", sourceTruckId);
+      }}
+      onDragEnd={onDragEnd}
+      className={`group relative mb-3 p-3 glass border rounded-xl transition-all duration-300
+        ${
+          isScheduledOff
+            ? "border-amber-400/50 bg-amber-500/10 shadow-[0_0_12px_rgba(245,158,11,0.35)] cursor-not-allowed opacity-80"
+            : "border-white/10 hover:border-sky-400/50 hover:shadow-[0_0_15px_rgba(14,165,233,0.15)] cursor-grab active:cursor-grabbing active:scale-95"
+        }`}
     >
+      {isScheduledOff && (
+        <div className="absolute -top-2 right-2 text-[9px] font-bold uppercase tracking-wider bg-amber-500 text-black px-2 py-0.5 rounded shadow">
+          Scheduled Off
+        </div>
+      )}
+
       <div className="flex items-center space-x-3">
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 to-blue-700 flex items-center justify-center text-white font-bold text-sm border border-white/20 shadow-inner">
+        <div
+          className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm border shadow-inner
+            ${
+              isScheduledOff
+                ? "bg-amber-400 text-black border-amber-300"
+                : "bg-gradient-to-br from-sky-500 to-blue-700 text-white border-white/20"
+            }`}
+        >
           {employee.initials}
         </div>
 
         <div className="flex-1">
           <div className="flex items-center justify-between">
-            <h3 className="text-white font-semibold text-sm group-hover:text-sky-300 transition-colors">
+            <h3
+              className={`font-semibold text-sm ${
+                isScheduledOff
+                  ? "text-amber-200"
+                  : "text-white group-hover:text-sky-300"
+              }`}
+            >
               {employee.name}
             </h3>
 

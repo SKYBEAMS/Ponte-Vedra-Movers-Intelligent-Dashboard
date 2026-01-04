@@ -12,14 +12,14 @@ export enum JobFlag {
 
 /** Automation/dispatch statuses */
 export enum JobStatus {
-  NEW = "new",
-  NEEDS_INFO = "needs_info",
-  READY = "ready",
-  ASSIGNED = "assigned",
-  IN_PROGRESS = "in_progress",
-  COMPLETED = "completed",
-  CANCELED = "canceled",
+  READY = "READY",
+  ASSIGNED = "ASSIGNED",
+  ARRIVED = "ARRIVED",
+  LOADED = "LOADED",
+  COMPLETED = "COMPLETED",
+  PAID = "PAID",
 }
+
 
 export interface Employee {
   id: string;
@@ -30,43 +30,45 @@ export interface Employee {
   rank: number;
 
   // NEW: if true, visually mark them as not available (X / strike-through)
-  noDayOff: boolean;
+  ScheduledOff: boolean;
 
   // Optional: quick UI warning state (turn yellow)
   warning?: boolean;
   warningNote?: string;
 }
 
-export interface Job {
+export type Job = {
   id: string;
 
-  // Human display (keep your existing UI working)
-  time: string;
+  // Core identity
   customerName: string;
-  customerPhone: string;
-  fromTo: string;
+  phone?: string;
+
+  // Scheduling
+  scheduledArrival: string; // ISO string (source of truth)
+
+  // Transitional / UI convenience fields (safe to keep)
+  time?: string;            // e.g. "9:00 AM"
+  fromTo?: string;          // e.g. "Jax Bch → PV"
+  customerPhone?: string;   // legacy alias (we’ll remove later)
+
+  // Locations (future real data)
+  pickupAddress?: string;
+  dropoffAddress?: string;
+
+  // Notes & flags
+  notes?: string;
   flags: JobFlag[];
-  notes: string;
 
-  // Automation-ready fields
+  // State
   status: JobStatus;
-
-  // If true, the contract should display as yellow warning (UI can glow)
   warning: boolean;
   warningNote?: string;
 
-  // Scheduling (needed for “1 hour after scheduled arrival” check-ins)
-  scheduledArrival: string; // ISO string
-
-  // Assignment + routing (optional for now)
+  // Assignment
   assignedTruckId?: string;
-  assignedCrewLeadId?: string;
-  jobOrderForTruck?: number;
-
-  // Live ops / ETA intelligence (optional for now)
-  estimatedFinishTime?: string; // ISO string
-  lastCrewUpdateAt?: string; // ISO string
-}
+  assignedCrewIds?: string[];
+};
 
 export interface Truck {
   id: string;
