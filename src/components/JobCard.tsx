@@ -1,8 +1,12 @@
 // ✅ src/components/JobCard.tsx
-import React from "react";
+import React, { useMemo } from "react";
 import { Clock, Info, MapPin, Trash2 } from "lucide-react";
-import { Job, JobFlag } from "../types";
+import { Job } from "../types";
 import { fromToDisplay } from "../utils/address";
+import {
+  evaluateJobWarnings,
+  evaluateJobWarningsResult,
+} from "../utils/jobwarnings";
 
 type Props = {
   job: Job;
@@ -13,7 +17,7 @@ type Props = {
   onDelete?: (id: string) => void;
   sourceTruckId?: string;
 
-  // ✅ NEW: mute/unmute warnings (wired from App.tsx)
+  // ✅ mute/unmute warnings (wired from App.tsx)
   onToggleWarningMute?: (jobId: string) => void;
 };
 
@@ -33,98 +37,61 @@ function normalizeLegacyFromTo(fromTo?: string): string {
   return cleaned;
 }
 
-/**
- * ✅ REQUIRED LINE + FUNCTION:
- * evaluateJobWarnings(job): Job
- *
- * We use this for DISPLAY-SIDE warning evaluation only.
- * It does NOT change buckets (App.tsx is the bucket truth), it only helps visual warnings.
- */
-function evaluateJobWarnings(job: Job): Job {
-  // ---- helpers (local, display-only) ----
-  const startOfDayMs = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-
-  const safeDateMs = (iso?: string): number | null => {
-    if (!iso) return null;
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return null;
-    return startOfDayMs(d);
-  };
-
-  const hasCriticalFieldProblems = (j: Job): boolean => {
-    const nameOk = !!j.customerName?.trim();
-    const phoneOk = !!(j.customerPhone ?? j.phone ?? "").trim();
-    const pickupOk = !!j.pickupAddress?.trim();
-    const dropoffOk = !!j.dropoffAddress?.trim();
-    const dateOk = safeDateMs(j.scheduledArrival) !== null;
-    return !(nameOk && phoneOk && pickupOk && dropoffOk && dateOk);
-  };
-
-  const isPastDate = (j: Job): boolean => {
-    const dayMs = safeDateMs(j.scheduledArrival);
-    if (dayMs === null) return true; // unreadable/missing date => hard
-    const todayMs = startOfDayMs(new Date());
-    return dayMs < todayMs;
-  };
-
-  // ---- if muted, don't change anything (user choice) ----
-  if (job.warningMuted) return job;
-
-  // ---- HARD rules (RED) ----
-  const critical = hasCriticalFieldProblems(job);
-  const past = isPastDate(job);
-
-  if (critical || past) {
-    // force hard for display
-    return {
-      ...job,
-      warning: true,
-      warningLevel: "hard",
-      warningNote:
-        job.warningNote ||
-        (past
-          ? "Past/invalid date — needs confirmation."
-          : "Missing required fields (name/phone/addresses/date)."),
-    };
-  }
-
-  // ---- Respect explicit hard set by automation/back-end ----
-  const existingLevel = job.warningLevel ?? (job.warning ? "soft" : "none");
-  if (existingLevel === "hard") return job;
-
-  // ---- SOFT warning flags (YELLOW) ----
-  const flags = job.flags || [];
-  const softFlagSet = new Set<JobFlag>([
-    JobFlag.PIANO,
-    JobFlag.PACKING,
-    JobFlag.MULTIPLE_TRUCKS,
-    JobFlag.HEAVY,
-    JobFlag.STAIRS,
-    JobFlag.MULTI_STOP,
-    JobFlag.STORAGE,
-  ]);
-
-  const softMatches = flags.filter((f) => softFlagSet.has(f));
-
-  // If we already have warning data, keep it (don’t overwrite)
-  if (existingLevel !== "none" || job.warning) return job;
-
-  if (softMatches.length > 0) {
-    const label =
-      softMatches.length === 1
-        ? `${softMatches[0]}`
-        : `${softMatches[0]} +${softMatches.length - 1}`;
-
-    return {
-      ...job,
-      warning: true,
-      warningLevel: "soft",
-      warningNote: `Heads up: ${label}`,
-    };
-  }
-
-  return job;
-}
+// ✅ visual chip config (icons without changing the whole card color unless threshold met)
+const CHIP: Record<
+  string,
+  { label: string; bg: string; border: string; glow: string; text: string }
+> = {
+  packing: {
+    label: "PACK",
+    bg: "bg-sky-500/10",
+    border: "border-sky-400/35",
+    glow: "shadow-[0_0_14px_rgba(14,165,233,0.30)]",
+    text: "text-sky-200/90",
+  },
+  stairs: {
+    label: "STAIRS",
+    bg: "bg-emerald-500/10",
+    border: "border-emerald-400/35",
+    glow: "shadow-[0_0_14px_rgba(16,185,129,0.28)]",
+    text: "text-emerald-200/90",
+  },
+  piano: {
+    label: "PIANO",
+    bg: "bg-fuchsia-500/10",
+    border: "border-fuchsia-400/35",
+    glow: "shadow-[0_0_14px_rgba(217,70,239,0.26)]",
+    text: "text-fuchsia-200/90",
+  },
+  "multiple-trucks": {
+    label: "2+ TRK",
+    bg: "bg-violet-500/10",
+    border: "border-violet-400/35",
+    glow: "shadow-[0_0_14px_rgba(139,92,246,0.22)]",
+    text: "text-violet-200/90",
+  },
+  heavy: {
+    label: "HEAVY",
+    bg: "bg-slate-500/10",
+    border: "border-slate-300/25",
+    glow: "shadow-[0_0_14px_rgba(148,163,184,0.18)]",
+    text: "text-slate-200/80",
+  },
+  "multi-stop": {
+    label: "STOPS",
+    bg: "bg-indigo-500/10",
+    border: "border-indigo-400/35",
+    glow: "shadow-[0_0_14px_rgba(99,102,241,0.20)]",
+    text: "text-indigo-200/90",
+  },
+  storage: {
+    label: "STOR",
+    bg: "bg-cyan-500/10",
+    border: "border-cyan-400/35",
+    glow: "shadow-[0_0_14px_rgba(34,211,238,0.18)]",
+    text: "text-cyan-200/90",
+  },
+};
 
 export default function JobCard({
   job,
@@ -136,20 +103,25 @@ export default function JobCard({
   sourceTruckId,
   onToggleWarningMute,
 }: Props) {
-  // ✅ evaluate warnings for visual display (does NOT mutate app state)
+  // ✅ normalize warnings (this returns Job w/ warning fields set)
   const j = evaluateJobWarnings(job);
 
-  // ✅ Warning logic (dim vs bright + mute support)
-  const warningLevel = j.warningLevel ?? (j.warning ? "soft" : "none"); // fallback safety
-  const hasWarning = warningLevel !== "none" || !!j.warning;
+  // ✅ read the detailed result so we can do “icons always, yellow only at 3+”
+  const result = useMemo(() => evaluateJobWarningsResult(j), [j]);
 
   const isMuted = !!j.warningMuted;
-  const showWarningVisual = hasWarning && !isMuted;
 
-  const isHard = showWarningVisual && warningLevel === "hard";
-  const isSoft = showWarningVisual && !isHard;
+  // HARD = red (date missing/invalid/past per your jobwarnings.ts)
+  const isHard = !isMuted && (j.warningLevel === "hard" || result.level === "hard");
 
-  // ✅ derive from truth fields when available
+  // SOFT (yellow) only if 3+ soft flags AND not muted
+  const softCount = result.softFlags?.length ?? 0;
+  const isSoft = !isMuted && !isHard && softCount >= 3;
+
+  // ✅ we still show chips for whatever soft flags exist (even if <3)
+  const chips = (result.softFlags || []).slice(0, 4); // keep tight; we can expand later
+
+  // addresses display
   const pickup = j.pickupAddress;
   const dropoff = j.dropoffAddress;
 
@@ -158,9 +130,7 @@ export default function JobCard({
     ? fromToDisplay(pickup, dropoff)
     : normalizeLegacyFromTo((j as any).fromTo);
 
-  // ✅ IMPORTANT CHANGE:
-  // Hard (critical) = RED
-  // Soft warnings = YELLOW
+  // ✅ Card visuals
   const borderBgClass = isHard
     ? "border-rose-400/80 bg-rose-500/12 shadow-[0_0_26px_rgba(244,63,94,0.35)]"
     : isSoft
@@ -175,13 +145,21 @@ export default function JobCard({
 
   const padClass = compact ? "p-2 mb-2" : "p-3 mb-3";
 
-  const badgeText = isHard ? "NEEDS REVIEW" : "WARNING";
+  const titleColor = isHard
+    ? "text-rose-300"
+    : isSoft
+    ? "text-amber-300"
+    : "text-sky-400";
 
-  // ✅ IMPORTANT CHANGE: header accent follows hard vs soft
-  const titleColor = isHard ? "text-rose-300" : showWarningVisual ? "text-amber-300" : "text-sky-400";
-  const infoHover = isHard ? "group-hover:text-rose-300" : showWarningVisual ? "group-hover:text-amber-300" : "group-hover:text-sky-400";
+  const infoHover = isHard
+    ? "group-hover:text-rose-300"
+    : isSoft
+    ? "group-hover:text-amber-300"
+    : "group-hover:text-sky-400";
 
   const displayName = (j.customerName || "").trim() ? j.customerName : "—";
+
+  const showMuteBtn = (j.warningLevel && j.warningLevel !== "none") || result.level !== "none";
 
   return (
     <div
@@ -190,7 +168,7 @@ export default function JobCard({
       onDragEnd={onDragEnd}
       onClick={(e) => {
         if (e.defaultPrevented) return;
-        onViewDetails(job); // open modal with real job ref
+        onViewDetails(job);
       }}
       className={`relative group glass border rounded-xl transition-all duration-300 cursor-pointer active:scale-95 ${borderBgClass} ${hoverClass} ${padClass}`}
     >
@@ -201,8 +179,8 @@ export default function JobCard({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* ✅ Mute/Unmute warnings button */}
-          {hasWarning && onToggleWarningMute && (
+          {/* ✅ Mute/Unmute warnings button (still allowed) */}
+          {showMuteBtn && onToggleWarningMute && (
             <button
               onClick={(e) => {
                 e.preventDefault();
@@ -244,22 +222,55 @@ export default function JobCard({
         {fromToText}
       </div>
 
-      {/* ✅ BADGES */}
-      {showWarningVisual && (
-        <div
-          className={`mt-2 inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-bold tracking-widest ${
-            isHard
-              ? "border-rose-400/55 bg-rose-500/16 text-rose-200"
-              : "border-amber-400/35 bg-amber-500/10 text-amber-300/90"
-          }`}
-          title={j.warningNote || ""}
-        >
-          {badgeText}
+      {/* ✅ Chips row (glowing indicators). Yellow card only when 3+ chips (soft flags). */}
+      {chips.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {chips.map((f) => {
+            const cfg = CHIP[f] || {
+              label: f.toUpperCase().slice(0, 6),
+              bg: "bg-white/5",
+              border: "border-white/10",
+              glow: "shadow-none",
+              text: "text-white/60",
+            };
+
+            // muted = no glow
+            const glow = isMuted ? "shadow-none" : cfg.glow;
+
+            return (
+              <span
+                key={f}
+                className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[9px] font-bold tracking-widest ${cfg.bg} ${cfg.border} ${cfg.text} ${glow}`}
+                title={f}
+              >
+                {cfg.label}
+              </span>
+            );
+          })}
+
+          {result.softFlags.length > chips.length && (
+            <span
+              className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[9px] font-bold tracking-widest bg-white/5 border-white/10 text-white/55 ${
+                isMuted ? "" : "shadow-[0_0_12px_rgba(255,255,255,0.08)]"
+              }`}
+              title={result.softFlags.join(", ")}
+            >
+              +{result.softFlags.length - chips.length}
+            </span>
+          )}
         </div>
       )}
 
-      {/* ✅ MUTED indicator (so Tim knows it’s muted) */}
-      {hasWarning && isMuted && (
+      {/* ✅ NO "WARNING" badge anymore.
+          If HARD (red), show a clear tiny reason line instead. */}
+      {isHard && !isMuted && (
+        <div className="mt-2 text-[10px] font-bold tracking-wider text-rose-200/90">
+          {j.warningNote || "Needs review — date issue."}
+        </div>
+      )}
+
+      {/* ✅ MUTED indicator */}
+      {showMuteBtn && isMuted && (
         <div
           className="mt-2 inline-flex items-center rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-bold tracking-widest text-white/50"
           title="Warning visuals are muted"

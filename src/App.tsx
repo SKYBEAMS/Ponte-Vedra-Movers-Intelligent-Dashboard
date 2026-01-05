@@ -20,8 +20,12 @@ import TruckCard from "./components/TruckCard";
 import JobDetailsModal from "./components/JobDetailsModal";
 
 import { pushHistory, popHistory } from "./utils/history";
+import {
+  evaluateJobWarnings,
+  evaluateJobWarningsResult,
+} from "./utils/jobwarnings";
 
-// ✅ NEW: history snapshot type
+// ✅ history snapshot type
 type AppStateSnapshot = {
   trucks: Truck[];
   allJobs: Job[];
@@ -42,7 +46,7 @@ function splitFromTo(fromTo?: string) {
   if (parts.length >= 2) return { from: parts[0], to: parts.slice(1).join(" → ") };
 
   const dash = s.split("-").map((p) => p.trim());
-  if (dash.length >= 2) return { from: dash[0], to: parts.slice(1).join(" - ") };
+  if (dash.length >= 2) return { from: dash[0], to: dash.slice(1).join(" - ") };
 
   return { from: s, to: "" };
 }
@@ -50,9 +54,12 @@ function splitFromTo(fromTo?: string) {
 /** ✅ helper: hydrate legacy jobs so pickup/dropoff always exist */
 function hydrateJobs(jobs: Job[]): Job[] {
   return jobs.map((j) => {
-    if ((j.pickupAddress && j.pickupAddress.trim()) || (j.dropoffAddress && j.dropoffAddress.trim())) {
-      return j;
-    }
+    const hasTruth =
+      (j.pickupAddress && j.pickupAddress.trim()) ||
+      (j.dropoffAddress && j.dropoffAddress.trim());
+
+    if (hasTruth) return j;
+
     const route = splitFromTo(j.fromTo);
     return {
       ...j,
@@ -62,11 +69,10 @@ function hydrateJobs(jobs: Job[]): Job[] {
   });
 }
 
-// ✅ NEW: date helpers for queue split (Needs Review vs Today vs Waiting)
+// ✅ Date helpers for Today/Waiting routing
 function startOfDayMs(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
-
 function safeDateMs(iso?: string): number | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -74,92 +80,17 @@ function safeDateMs(iso?: string): number | null {
   return startOfDayMs(d);
 }
 
-function hasCriticalFieldProblems(job: Job): boolean {
-  // “Critical fields” for dispatch/automation safety
-  const nameOk = !!job.customerName?.trim();
-  const phoneOk = !!job.customerPhone?.trim();
-  const pickupOk = !!job.pickupAddress?.trim();
-  const dropoffOk = !!job.dropoffAddress?.trim();
-
-  // scheduledArrival must exist AND be parseable
-  const dateOk = safeDateMs(job.scheduledArrival) !== null;
-
-  return !(nameOk && phoneOk && pickupOk && dropoffOk && dateOk);
-}
-
-function isPastDate(job: Job): boolean {
-  const dayMs = safeDateMs(job.scheduledArrival);
-  if (dayMs === null) return true; // unreadable/missing date => Needs Review
-  const todayMs = startOfDayMs(new Date());
-  return dayMs < todayMs;
-}
-function evaluateJobWarnings(job: Job): Job {
-  // ---- HARD triggers (Needs Review) ----
-  const nameOk = !!job.customerName?.trim();
-  const phoneOk = !!job.customerPhone?.trim();
-  const pickupOk = !!job.pickupAddress?.trim();
-  const dropoffOk = !!job.dropoffAddress?.trim();
-
-  const date = job.scheduledArrival ? new Date(job.scheduledArrival) : null;
-  const dateOk = !!date && !Number.isNaN(date.getTime());
-
-  const missingCritical = !(nameOk && phoneOk && pickupOk && dropoffOk && dateOk);
-
-  let pastDate = false;
-  if (dateOk) {
-    const d0 = new Date(date!.getFullYear(), date!.getMonth(), date!.getDate()).getTime();
-    const t0 = new Date();
-    const today0 = new Date(t0.getFullYear(), t0.getMonth(), t0.getDate()).getTime();
-    pastDate = d0 < today0;
-  } else {
-    // unreadable date counts as hard
-    pastDate = true;
-  }
-
-  // ---- SOFT triggers (Heads up) ----
-  const flags = job.flags || [];
-  const hasSoftFlag =
-    flags.includes("stairs" as any) ||
-    flags.includes("heavy" as any) ||
-    flags.includes("piano" as any) ||
-    flags.includes("packing" as any) ||
-    flags.includes("multi-stop" as any) ||
-    flags.includes("multiple-trucks" as any);
-
-  // ---- Decide level ----
-  let warningLevel: "none" | "soft" | "hard" = "none";
-  let warningNote = "";
-
-  if (missingCritical) {
-    warningLevel = "hard";
-    warningNote = "Missing required job details (name/phone/addresses/date).";
-  } else if (pastDate) {
-    warningLevel = "hard";
-    warningNote = "Scheduled date is in the past — verify.";
-  } else if (hasSoftFlag) {
-    warningLevel = "soft";
-    warningNote = "Caution: special handling (flags).";
-  }
-
-  return {
-    ...job,
-    warningLevel,
-    warning: warningLevel !== "none",
-    warningNote: warningNote || job.warningNote,
-  };
-}
-
 export default function App() {
   const [trucks, setTrucks] = useState<Truck[]>(INITIAL_TRUCKS);
 
-  /** ✅ initial jobs hydrated once */
-  const [allJobs, setAllJobs] = useState<Job[]>(hydrateJobs(INITIAL_JOBS));
+  /** ✅ initial jobs hydrated once + warnings stamped once */
+  const [allJobs, setAllJobs] = useState<Job[]>(
+    hydrateJobs(INITIAL_JOBS).map(evaluateJobWarnings)
+  );
 
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
 
   // ✅ history stores full snapshot (trucks + jobs)
-  // NOTE: keep your existing Snapshot typing if it exists in your project.
-  // If TS errors here, tell me and I’ll align it to your actual history util types.
   // @ts-ignore
   const [history, setHistory] = useState<any[]>([]);
 
@@ -184,59 +115,50 @@ export default function App() {
     return allJobs.filter((j) => !assignedIds.has(j.id));
   }, [trucks, allJobs]);
 
-  // ✅ NEW: Needs Review bucket
+  // ✅ TRUE Needs Review: use ONE evaluator (hard == needs review)
   const needsReviewJobs = useMemo(() => {
-    return unassignedJobs.filter((j) => {
-      const critical = hasCriticalFieldProblems(j);
-      const past = isPastDate(j);
-
-      // ✅ HARD warnings force Needs Review
-      // Soft warnings (piano, packing, etc) do NOT
-      const hardWarning = j.warningLevel === "hard";
-
-      return critical || past || hardWarning;
-    });
+    return unassignedJobs.filter((j) => evaluateJobWarningsResult(j).level === "hard");
   }, [unassignedJobs]);
 
-  // ✅ NEW: split queues (exclude Needs Review)
+  const needsReviewIds = useMemo(() => {
+    return new Set(needsReviewJobs.map((j) => j.id));
+  }, [needsReviewJobs]);
+
+  // ✅ Today Queue (exclude Needs Review)
   const todayQueueJobs = useMemo(() => {
     const todayMs = startOfDayMs(new Date());
-    const needs = new Set(needsReviewJobs.map((j) => j.id));
 
     return unassignedJobs.filter((j) => {
-      if (needs.has(j.id)) return false;
+      if (needsReviewIds.has(j.id)) return false;
       const dayMs = safeDateMs(j.scheduledArrival);
       return dayMs !== null && dayMs === todayMs;
     });
-  }, [unassignedJobs, needsReviewJobs]);
+  }, [unassignedJobs, needsReviewIds]);
 
+  // ✅ Waiting Queue (exclude Needs Review)
   const waitingQueueJobs = useMemo(() => {
     const todayMs = startOfDayMs(new Date());
-    const needs = new Set(needsReviewJobs.map((j) => j.id));
 
     return unassignedJobs.filter((j) => {
-      if (needs.has(j.id)) return false;
+      if (needsReviewIds.has(j.id)) return false;
       const dayMs = safeDateMs(j.scheduledArrival);
       return dayMs !== null && dayMs > todayMs;
     });
-  }, [unassignedJobs, needsReviewJobs]);
+  }, [unassignedJobs, needsReviewIds]);
 
   const saveHistory = useCallback(() => {
     setHistory((prev) =>
-      pushHistory(
-        prev,
-        {
-          trucks: cloneTrucks(trucks),
-          allJobs: cloneJobs(allJobs),
-        } as AppStateSnapshot
-      )
+      pushHistory(prev, {
+        trucks: cloneTrucks(trucks),
+        allJobs: cloneJobs(allJobs),
+      } as AppStateSnapshot)
     );
   }, [trucks, allJobs]);
 
   const handleRefresh = useCallback(() => {
     setHistory([]);
     setTrucks(INITIAL_TRUCKS);
-    setAllJobs(hydrateJobs(INITIAL_JOBS));
+    setAllJobs(hydrateJobs(INITIAL_JOBS).map(evaluateJobWarnings));
     setSelectedJob(null);
   }, []);
 
@@ -244,15 +166,12 @@ export default function App() {
     const { nextHistory, last } = popHistory(history);
     if (!last) return;
 
-    // last could be either snapshot or raw depending on your history util
     const snapshot = last.trucks && last.allJobs ? last : last?.state ?? last;
-
     if (!snapshot) return;
 
     setTrucks(snapshot.trucks);
     setAllJobs(snapshot.allJobs);
 
-    // keep modal in sync after undo (close if job disappears)
     setSelectedJob((prev) => {
       if (!prev) return null;
       const found = snapshot.allJobs.find((j: Job) => j.id === prev.id);
@@ -280,12 +199,10 @@ export default function App() {
     (e.target as HTMLElement).style.opacity = "1";
   };
 
-  // ✅ NEW: Tim can mute/unmute warnings per-job (does NOT change bucket logic)
+  // ✅ Tim can mute/unmute warnings per-job (does NOT change bucket logic)
   const toggleJobWarningMute = useCallback((jobId: string) => {
     setAllJobs((prev) =>
-      prev.map((j) =>
-        j.id === jobId ? { ...j, warningMuted: !j.warningMuted } : j
-      )
+      prev.map((j) => (j.id === jobId ? { ...j, warningMuted: !j.warningMuted } : j))
     );
   }, []);
 
@@ -296,7 +213,6 @@ export default function App() {
 
     if (dragItem.sourceTruckId === targetTruckId) return;
 
-    // ✅ history should capture BEFORE the change
     saveHistory();
 
     setTrucks((prevTrucks) => {
@@ -321,11 +237,14 @@ export default function App() {
         if (source) source.jobIds = source.jobIds.filter((id) => id !== dragItem.id);
         if (!target.jobIds.includes(dragItem.id)) target.jobIds.push(dragItem.id);
 
-        // mark job ASSIGNED when placed on a truck
         setAllJobs((prev) =>
           prev.map((j) =>
             j.id === dragItem.id
-              ? { ...j, status: JobStatus.ASSIGNED, assignedTruckId: targetTruckId }
+              ? evaluateJobWarnings({
+                  ...j,
+                  status: JobStatus.ASSIGNED,
+                  assignedTruckId: targetTruckId,
+                })
               : j
           )
         );
@@ -371,49 +290,46 @@ export default function App() {
       })
     );
 
-    // reset job back to READY + clear assignment
     setAllJobs((prev) =>
       prev.map((j) =>
         j.id === dragItem.id
-          ? { ...j, status: JobStatus.READY, assignedTruckId: undefined }
+          ? evaluateJobWarnings({ ...j, status: JobStatus.READY, assignedTruckId: undefined })
           : j
       )
     );
   };
 
   const addJob = () => {
-    saveHistory(); // ✅ so Undo removes the new job
+    saveHistory();
 
-    const newJob: Job = {
+    const baseNewJob: Job = {
       id: `j-${Date.now()}`,
       time: "09:00 AM",
-      customerName: "New Client",
-      customerPhone: "(904) 000-0000",
+      customerName: "",
+      customerPhone: "",
 
-      // ✅ start blank (truth fields)
       pickupAddress: "",
       dropoffAddress: "",
-
-      // ✅ display label starts blank
       fromTo: "",
 
       flags: [],
       notes: "Please update job details.",
       status: JobStatus.READY,
-      warning: true,
-      warningNote: "Missing required job details.",
       scheduledArrival: new Date().toISOString(),
+
+      // keep fields present so UI never freaks out
+      warning: false,
+      warningLevel: "none",
     };
 
+    const newJob = evaluateJobWarnings(baseNewJob);
     setAllJobs((prev) => [...prev, newJob]);
-    setSelectedJob(newJob); // ✅ open editor immediately
+    setSelectedJob(newJob);
   };
 
   const deleteJob = (id: string) => {
     saveHistory();
-    setTrucks((prev) =>
-      prev.map((t) => ({ ...t, jobIds: t.jobIds.filter((jid) => jid !== id) }))
-    );
+    setTrucks((prev) => prev.map((t) => ({ ...t, jobIds: t.jobIds.filter((jid) => jid !== id) })));
     setAllJobs((prev) => prev.filter((j) => j.id !== id));
     setSelectedJob((prev) => (prev?.id === id ? null : prev));
   };
@@ -544,7 +460,7 @@ export default function App() {
               </div>
             )}
 
-            {/* ✅ NEW: Needs Review */}
+            {/* ✅ Needs Review */}
             <div className="mb-3">
               <div className="flex items-center justify-between px-2 mb-2">
                 <span className="text-[10px] font-bold text-amber-300/90 tracking-widest uppercase flex items-center gap-2">
@@ -611,19 +527,19 @@ export default function App() {
                 </span>
               </div>
 
-              {waitingQueueJobs.length > 0 ? (
-                waitingQueueJobs.map((job) => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onViewDetails={setSelectedJob}
-                    onDelete={deleteJob}
-                    onToggleWarningMute={toggleJobWarningMute}
-                  />
-                ))
-              ) : null}
+              {waitingQueueJobs.length > 0
+                ? waitingQueueJobs.map((job) => (
+                    <JobCard
+                      key={job.id}
+                      job={job}
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      onViewDetails={setSelectedJob}
+                      onDelete={deleteJob}
+                      onToggleWarningMute={toggleJobWarningMute}
+                    />
+                  ))
+                : null}
             </div>
 
             {/* NOTE: queueJobs is still computed above and left intact for safety */}
@@ -638,11 +554,13 @@ export default function App() {
           job={selectedJob}
           onClose={() => setSelectedJob(null)}
           onUpdateJob={(updatedJob) => {
-            // ✅ save correct snapshot BEFORE changing jobs
             saveHistory();
 
-            setAllJobs((prev) => prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)));
-            setSelectedJob(updatedJob);
+            // ✅ CENTRAL truth: stamp warnings before saving
+            const finalJob = evaluateJobWarnings(updatedJob);
+
+            setAllJobs((prev) => prev.map((j) => (j.id === finalJob.id ? finalJob : j)));
+            setSelectedJob(finalJob);
           }}
         />
       )}

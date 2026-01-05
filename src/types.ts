@@ -68,12 +68,12 @@ export type Job = {
   status: JobStatus;
 
   /** ✅ Existing warning fields (kept for now) */
-  warning: boolean;
+  warning?: boolean;            // ✅ CHANGED: optional (prevents TS breakage)
   warningNote?: string;
 
   /** ✅ NEW: structured warning (truth) */
-  warningLevel?: WarningLevel; // "hard" forces Needs Review, "soft" does not
-  warningMuted?: boolean; // owner can hide the warning badge without losing data
+  warningLevel?: WarningLevel;  // "hard" forces Needs Review, "soft" does not
+  warningMuted?: boolean;       // owner can hide the warning badge without losing data
 
   // Assignment
   assignedTruckId?: string;
