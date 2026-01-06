@@ -1,3 +1,4 @@
+// src/components/TruckCard.tsx
 import React, { useMemo, useState } from "react";
 import {
   AlertCircle,
@@ -10,6 +11,7 @@ import {
 
 import type { Employee, Job, Truck } from "../types";
 import JobCard from "./JobCard";
+import { evaluateTruckWarnings } from "../utils/truckWarnings";
 
 type TruckCardProps = {
   truck: Truck;
@@ -22,8 +24,9 @@ type TruckCardProps = {
     type: "employee" | "job",
     sourceTruckId?: string
   ) => void;
-  onDragEnd?: (e: React.DragEvent) => void; // optional so nothing breaks
+  onDragEnd?: (e: React.DragEvent) => void;
   onViewJobDetails: (job: Job) => void;
+  onToggleTruckMute: (truckId: string) => void;
 };
 
 export default function TruckCard({
@@ -34,45 +37,60 @@ export default function TruckCard({
   onDragStart,
   onDragEnd,
   onViewJobDetails,
+  onToggleTruckMute,
 }: TruckCardProps) {
   const [isOver, setIsOver] = useState(false);
   const isFull = crew.length >= truck.capacity;
 
-  // ✅ Truck yellow rules (ONLY these)
-  const fuelLow = truck.fuelLevel < 30;
-  const truckWarning = !truck.ready || fuelLow;
+  const active = crew.length > 0 || jobs.length > 0;
 
-  // Lead = highest rank
+  // ✅ UPDATED: Lead = highest rank (prioritizing phone holders)
+  // Matches logic in truckWarnings.ts
   const leadEmployee = useMemo(() => {
     if (crew.length === 0) return null;
-    return [...crew].sort((a, b) => b.rank - a.rank)[0];
+
+    const withPhone = crew.filter((p) => (p.phone ?? "").trim().length > 0);
+    const pool = withPhone.length > 0 ? withPhone : crew;
+
+    return [...pool].sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0))[0];
   }, [crew]);
+
+  const warning = evaluateTruckWarnings(truck, { crew, jobsCount: jobs.length });
+  const muted = truck.warningMuted === true;
+
+  const showWarning = active && !muted && warning.warningLevel !== "none";
+  const truckHard = showWarning && warning.warningLevel === "hard";
+  const truckSoft = showWarning && warning.warningLevel === "soft";
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsOver(true);
   };
-
   const handleDragLeave = () => setIsOver(false);
-
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsOver(false);
     onDrop(e, truck.id);
   };
 
-  // Base border color (normal vs warning)
-  const baseBorder = truckWarning ? "border-amber-500/35" : "border-white/10";
+  // Base border color (normal vs warning) + dim when not active
+  const baseBorder = showWarning
+    ? truckHard
+      ? "border-rose-500/45"
+      : "border-amber-500/35"
+    : "border-white/10";
 
-  // When dragging over:
-  // - full crew blocks (red)
-  // - otherwise highlight blue
-  // - if truck is already warning, keep a subtle amber influence
+  const baseDim = !active ? "opacity-70" : "";
+
   const overBorder = isFull
     ? "border-rose-500/50 shadow-[0_0_30px_rgba(244,63,94,0.2)]"
-    : truckWarning
-    ? "border-amber-400/70 shadow-[0_0_30px_rgba(245,158,11,0.18)] scale-[1.02]"
+    : showWarning
+    ? truckHard
+      ? "border-rose-400/70 shadow-[0_0_30px_rgba(244,63,94,0.18)] scale-[1.02]"
+      : "border-amber-400/70 shadow-[0_0_30px_rgba(245,158,11,0.18)] scale-[1.02]"
     : "border-sky-400 shadow-[0_0_30px_rgba(14,165,233,0.3)] scale-[1.02]";
+
+  const fuelBand = warning.fuelBand; // "ok" | "low" | "critical"
 
   return (
     <div
@@ -81,20 +99,19 @@ export default function TruckCard({
       onDrop={handleDrop}
       className={`glass border transition-all duration-300 rounded-2xl flex flex-col min-h-[220px] overflow-hidden ${
         isOver ? overBorder : baseBorder
-      } ${
-        truckWarning && !isOver
-          ? "shadow-[0_0_18px_rgba(245,158,11,0.10)]"
-          : ""
-      }`}
+      } ${showWarning && !isOver ? "shadow-[0_0_18px_rgba(245,158,11,0.08)]" : ""} ${baseDim}`}
+      title={showWarning && warning.warningNote ? warning.warningNote : undefined}
     >
       <div className="bg-white/5 p-3 flex items-center justify-between border-b border-white/5">
         <div className="flex items-center space-x-2">
           <TruckIcon
             size={18}
             className={
-              truckWarning
-                ? "text-amber-300"
-                : truck.ready
+              showWarning
+                ? truckHard
+                  ? "text-rose-300"
+                  : "text-amber-300"
+                : active
                 ? "text-sky-400"
                 : "text-white/30"
             }
@@ -103,15 +120,37 @@ export default function TruckCard({
             {truck.name}
           </h2>
 
-          {/* Optional tiny warning chip */}
-          {truckWarning && (
-            <span className="ml-2 text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded border border-amber-400/30 bg-amber-500/10 text-amber-300">
-              Warning
+          {showWarning && (
+            <span
+              className={`ml-2 text-[9px] font-bold tracking-widest uppercase px-2 py-0.5 rounded border ${
+                truckHard
+                  ? "border-rose-400/30 bg-rose-500/10 text-rose-200"
+                  : "border-amber-400/30 bg-amber-500/10 text-amber-300"
+              }`}
+            >
+              {truckHard ? "Needs Review" : "Warning"}
             </span>
           )}
         </div>
 
         <div className="flex items-center space-x-3">
+          {/* Mute Button */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleTruckMute(truck.id);
+            }}
+            className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded border transition ${
+              truck.warningMuted
+                ? "border-sky-400/40 bg-sky-500/10 text-sky-300"
+                : "border-white/10 bg-white/5 text-white/50 hover:text-white"
+            }`}
+            title="Mute/unmute truck warnings"
+          >
+            {truck.warningMuted ? "Muted" : "Mute"}
+          </button>
+
           <div className="flex flex-col items-end">
             <span className="text-[9px] text-white/40 uppercase font-bold">
               Fuel
@@ -119,7 +158,11 @@ export default function TruckCard({
             <div className="w-16 h-1 bg-white/10 rounded-full mt-0.5 overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all duration-1000 ${
-                  fuelLow ? "bg-rose-500" : "bg-sky-500"
+                  fuelBand === "critical"
+                    ? "bg-rose-500"
+                    : fuelBand === "low"
+                    ? "bg-amber-400"
+                    : "bg-sky-500"
                 }`}
                 style={{ width: `${truck.fuelLevel}%` }}
               />
@@ -134,11 +177,7 @@ export default function TruckCard({
             }`}
             title={truck.ready ? "Ready" : "Not ready"}
           >
-            {truck.ready ? (
-              <CheckCircle2 size={12} />
-            ) : (
-              <AlertCircle size={12} />
-            )}
+            {truck.ready ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
           </div>
         </div>
       </div>
@@ -168,9 +207,7 @@ export default function TruckCard({
                 <div
                   key={person.id}
                   draggable
-                  onDragStart={(e) =>
-                    onDragStart(e, person.id, "employee", truck.id)
-                  }
+                  onDragStart={(e) => onDragStart(e, person.id, "employee", truck.id)}
                   onDragEnd={onDragEnd}
                   className={`group relative h-10 w-10 rounded-full flex items-center justify-center text-xs font-bold transition-all cursor-grab active:cursor-grabbing shadow-lg shadow-sky-900/20 ${
                     isLead
@@ -192,9 +229,7 @@ export default function TruckCard({
             {crew.length === 0 && (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/10 py-6">
                 <Users size={20} className="mb-1" />
-                <span className="text-[8px] uppercase tracking-tighter">
-                  Assign Crew
-                </span>
+                <span className="text-[8px] uppercase tracking-tighter">Assign Crew</span>
               </div>
             )}
           </div>
@@ -223,9 +258,7 @@ export default function TruckCard({
             {jobs.length === 0 && (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/10 py-6">
                 <ClipboardList size={20} className="mb-1" />
-                <span className="text-[8px] uppercase tracking-tighter">
-                  Drop Contract
-                </span>
+                <span className="text-[8px] uppercase tracking-tighter">Drop Contract</span>
               </div>
             )}
           </div>
@@ -234,24 +267,36 @@ export default function TruckCard({
 
       {/* Footer Flags */}
       <div className="bg-sky-950/20 p-2 px-3 border-t border-white/5 flex items-center space-x-3 overflow-x-auto no-scrollbar">
-        {fuelLow && (
+        {/* Fuel */}
+        {active && fuelBand === "critical" && (
           <div className="flex items-center space-x-1 text-rose-400 text-[9px] font-bold whitespace-nowrap bg-rose-500/10 px-1.5 py-0.5 rounded">
             <AlertCircle size={10} />
-            <span>CRITICAL FUEL</span>
+            <span>FUEL CRITICAL</span>
           </div>
         )}
 
-        {!truck.ready && (
+        {active && fuelBand === "low" && (
           <div className="flex items-center space-x-1 text-amber-300 text-[9px] font-bold whitespace-nowrap bg-amber-500/10 px-1.5 py-0.5 rounded">
             <AlertCircle size={10} />
-            <span>SUPPLIES / READY CHECK</span>
+            <span>FUEL LOW</span>
           </div>
         )}
 
-        <div className="flex items-center space-x-1 text-sky-300 text-[9px] font-bold whitespace-nowrap bg-sky-500/10 px-1.5 py-0.5 rounded">
-          <AlertCircle size={10} />
-          <span>UPDATE NEEDED</span>
-        </div>
+        {/* Truck readiness */}
+        {active && truck.ready === false && (
+          <div className="flex items-center space-x-1 text-rose-300 text-[9px] font-bold whitespace-nowrap bg-rose-500/10 px-1.5 py-0.5 rounded">
+            <AlertCircle size={10} />
+            <span>TRUCK NOT READY</span>
+          </div>
+        )}
+
+        {/* Evaluator note (optional) */}
+        {active && showWarning && warning.warningNote && (
+          <div className="flex items-center space-x-1 text-sky-300 text-[9px] font-bold whitespace-nowrap bg-sky-500/10 px-1.5 py-0.5 rounded">
+            <AlertCircle size={10} />
+            <span>{warning.warningNote.toUpperCase()}</span>
+          </div>
+        )}
       </div>
     </div>
   );

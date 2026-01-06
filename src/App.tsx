@@ -10,7 +10,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 
-import { Job, Truck, DragItem, JobStatus } from "./types";
+import { Job, Truck, DragItem, JobStatus, Employee } from "./types";
 import { INITIAL_EMPLOYEES, INITIAL_TRUCKS, INITIAL_JOBS } from "./constants";
 
 import TopNav from "./components/TopNav";
@@ -29,6 +29,7 @@ import {
 type AppStateSnapshot = {
   trucks: Truck[];
   allJobs: Job[];
+  employees: Employee[];
 };
 
 const cloneTrucks = (trucks: Truck[]): Truck[] =>
@@ -36,6 +37,9 @@ const cloneTrucks = (trucks: Truck[]): Truck[] =>
 
 const cloneJobs = (jobs: Job[]): Job[] =>
   jobs.map((j) => ({ ...j, flags: [...(j.flags || [])] }));
+
+const cloneEmployees = (emps: Employee[]): Employee[] =>
+  emps.map((e) => ({ ...e }));
 
 /** ✅ helper: split legacy fromTo into two parts */
 function splitFromTo(fromTo?: string) {
@@ -83,6 +87,9 @@ function safeDateMs(iso?: string): number | null {
 export default function App() {
   const [trucks, setTrucks] = useState<Truck[]>(INITIAL_TRUCKS);
 
+  // ✅ Employees state
+  const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
+
   /** ✅ initial jobs hydrated once + warnings stamped once */
   const [allJobs, setAllJobs] = useState<Job[]>(
     hydrateJobs(INITIAL_JOBS).map(evaluateJobWarnings)
@@ -90,14 +97,13 @@ export default function App() {
 
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
 
-  // ✅ history stores full snapshot (trucks + jobs)
-  // @ts-ignore
-  const [history, setHistory] = useState<any[]>([]);
+  // ✅ typed history
+  const [history, setHistory] = useState<AppStateSnapshot[]>([]);
 
   const rosterEmployees = useMemo(() => {
     const assignedIds = new Set(trucks.flatMap((t) => t.crewIds));
-    return INITIAL_EMPLOYEES.filter((e) => !assignedIds.has(e.id));
-  }, [trucks]);
+    return employees.filter((e) => !assignedIds.has(e.id));
+  }, [trucks, employees]);
 
   // ✅ assigned job IDs (jobs already on trucks)
   const assignedJobIds = useMemo(() => {
@@ -117,7 +123,9 @@ export default function App() {
 
   // ✅ TRUE Needs Review: use ONE evaluator (hard == needs review)
   const needsReviewJobs = useMemo(() => {
-    return unassignedJobs.filter((j) => evaluateJobWarningsResult(j).level === "hard");
+    return unassignedJobs.filter(
+      (j) => evaluateJobWarningsResult(j).level === "hard"
+    );
   }, [unassignedJobs]);
 
   const needsReviewIds = useMemo(() => {
@@ -151,13 +159,15 @@ export default function App() {
       pushHistory(prev, {
         trucks: cloneTrucks(trucks),
         allJobs: cloneJobs(allJobs),
+        employees: cloneEmployees(employees),
       } as AppStateSnapshot)
     );
-  }, [trucks, allJobs]);
+  }, [trucks, allJobs, employees]);
 
   const handleRefresh = useCallback(() => {
     setHistory([]);
     setTrucks(INITIAL_TRUCKS);
+    setEmployees(INITIAL_EMPLOYEES);
     setAllJobs(hydrateJobs(INITIAL_JOBS).map(evaluateJobWarnings));
     setSelectedJob(null);
   }, []);
@@ -166,11 +176,15 @@ export default function App() {
     const { nextHistory, last } = popHistory(history);
     if (!last) return;
 
-    const snapshot = last.trucks && last.allJobs ? last : last?.state ?? last;
+    const snapshot =
+      (last as any).trucks && (last as any).allJobs
+        ? last
+        : (last as any)?.state ?? last;
     if (!snapshot) return;
 
     setTrucks(snapshot.trucks);
     setAllJobs(snapshot.allJobs);
+    if (snapshot.employees) setEmployees(snapshot.employees);
 
     setSelectedJob((prev) => {
       if (!prev) return null;
@@ -200,11 +214,30 @@ export default function App() {
   };
 
   // ✅ Tim can mute/unmute warnings per-job (does NOT change bucket logic)
-  const toggleJobWarningMute = useCallback((jobId: string) => {
-    setAllJobs((prev) =>
-      prev.map((j) => (j.id === jobId ? { ...j, warningMuted: !j.warningMuted } : j))
-    );
-  }, []);
+  const toggleJobWarningMute = useCallback(
+    (jobId: string) => {
+      saveHistory();
+      setAllJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId ? { ...j, warningMuted: !j.warningMuted } : j
+        )
+      );
+    },
+    [saveHistory]
+  );
+
+  // ✅ Tim can mute/unmute truck warnings
+  const toggleTruckWarningMute = useCallback(
+    (truckId: string) => {
+      saveHistory();
+      setTrucks((prev) =>
+        prev.map((t) =>
+          t.id === truckId ? { ...t, warningMuted: !t.warningMuted } : t
+        )
+      );
+    },
+    [saveHistory]
+  );
 
   const handleDropOnTruck = (e: React.DragEvent, targetTruckId: string) => {
     const rawData = e.dataTransfer.getData("application/json");
@@ -231,11 +264,15 @@ export default function App() {
 
       if (dragItem.type === "employee") {
         if (target.crewIds.length >= target.capacity) return prevTrucks;
-        if (source) source.crewIds = source.crewIds.filter((id) => id !== dragItem.id);
-        if (!target.crewIds.includes(dragItem.id)) target.crewIds.push(dragItem.id);
+        if (source)
+          source.crewIds = source.crewIds.filter((id) => id !== dragItem.id);
+        if (!target.crewIds.includes(dragItem.id))
+          target.crewIds.push(dragItem.id);
       } else {
-        if (source) source.jobIds = source.jobIds.filter((id) => id !== dragItem.id);
-        if (!target.jobIds.includes(dragItem.id)) target.jobIds.push(dragItem.id);
+        if (source)
+          source.jobIds = source.jobIds.filter((id) => id !== dragItem.id);
+        if (!target.jobIds.includes(dragItem.id))
+          target.jobIds.push(dragItem.id);
 
         setAllJobs((prev) =>
           prev.map((j) =>
@@ -265,7 +302,10 @@ export default function App() {
     setTrucks((prevTrucks) =>
       prevTrucks.map((t) => {
         if (t.id === dragItem.sourceTruckId) {
-          return { ...t, crewIds: t.crewIds.filter((id) => id !== dragItem.id) };
+          return {
+            ...t,
+            crewIds: t.crewIds.filter((id) => id !== dragItem.id),
+          };
         }
         return t;
       })
@@ -293,7 +333,11 @@ export default function App() {
     setAllJobs((prev) =>
       prev.map((j) =>
         j.id === dragItem.id
-          ? evaluateJobWarnings({ ...j, status: JobStatus.READY, assignedTruckId: undefined })
+          ? evaluateJobWarnings({
+              ...j,
+              status: JobStatus.READY,
+              assignedTruckId: undefined,
+            })
           : j
       )
     );
@@ -329,7 +373,12 @@ export default function App() {
 
   const deleteJob = (id: string) => {
     saveHistory();
-    setTrucks((prev) => prev.map((t) => ({ ...t, jobIds: t.jobIds.filter((jid) => jid !== id) })));
+    setTrucks((prev) =>
+      prev.map((t) => ({
+        ...t,
+        jobIds: t.jobIds.filter((jid) => jid !== id),
+      }))
+    );
     setAllJobs((prev) => prev.filter((j) => j.id !== id));
     setSelectedJob((prev) => (prev?.id === id ? null : prev));
   };
@@ -339,7 +388,11 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-white tron-grid overflow-hidden relative">
-      <TopNav onUndo={handleUndo} canUndo={history.length > 0} onRefresh={handleRefresh} />
+      <TopNav
+        onUndo={handleUndo}
+        canUndo={history.length > 0}
+        onRefresh={handleRefresh}
+      />
 
       <main className="flex-1 flex overflow-hidden pt-16 p-6 space-x-6">
         {/* Left Column: Employees (Roster) */}
@@ -370,7 +423,9 @@ export default function App() {
             {rosterOver && (
               <div className="flex items-center justify-center py-4 border-2 border-dashed border-sky-400/50 rounded-xl mb-3 animate-pulse bg-sky-500/5">
                 <ArrowDown size={24} className="text-sky-400" />
-                <span className="ml-2 text-xs font-bold text-sky-400 uppercase">Drop to Unassign</span>
+                <span className="ml-2 text-xs font-bold text-sky-400 uppercase">
+                  Drop to Unassign
+                </span>
               </div>
             )}
 
@@ -392,12 +447,14 @@ export default function App() {
               <TruckCard
                 key={truck.id}
                 truck={truck}
-                crew={INITIAL_EMPLOYEES.filter((e) => truck.crewIds.includes(e.id))}
+                crew={employees.filter((e) => truck.crewIds.includes(e.id))}
                 jobs={allJobs.filter((j) => truck.jobIds.includes(j.id))}
                 onDrop={handleDropOnTruck}
                 onDragStart={handleDragStart}
                 onDragEnd={handleDragEnd}
                 onViewJobDetails={setSelectedJob}
+                // ✅ ADDED THIS LINE to pass the function down
+                onToggleTruckMute={toggleTruckWarningMute}
               />
             ))}
           </div>
@@ -406,7 +463,9 @@ export default function App() {
             <div className="flex items-center space-x-6">
               <div className="flex items-center space-x-2">
                 <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></div>
-                <span className="text-[10px] font-bold text-white/60 tracking-wider">SYSTEMS NOMINAL</span>
+                <span className="text-[10px] font-bold text-white/60 tracking-wider">
+                  SYSTEMS NOMINAL
+                </span>
               </div>
 
               <div className="flex items-center space-x-2">
@@ -419,7 +478,9 @@ export default function App() {
 
             <div className="flex items-center space-x-2 bg-sky-500/10 px-3 py-1.5 rounded-lg border border-sky-500/20">
               <Signal size={14} className="text-sky-400" />
-              <span className="text-[10px] font-tech text-sky-400 tracking-widest">NETWORK: ACTIVE</span>
+              <span className="text-[10px] font-tech text-sky-400 tracking-widest">
+                NETWORK: ACTIVE
+              </span>
             </div>
           </div>
         </div>
@@ -456,7 +517,9 @@ export default function App() {
             {queueOver && (
               <div className="flex items-center justify-center py-4 border-2 border-dashed border-sky-400/50 rounded-xl mb-3 animate-pulse bg-sky-500/5">
                 <ArrowDown size={24} className="text-sky-400" />
-                <span className="ml-2 text-xs font-bold text-sky-400 uppercase">Drop to Return</span>
+                <span className="ml-2 text-xs font-bold text-sky-400 uppercase">
+                  Drop to Return
+                </span>
               </div>
             )}
 
@@ -485,14 +548,18 @@ export default function App() {
                   />
                 ))
               ) : (
-                <div className="text-[10px] text-white/40 px-2">No review items.</div>
+                <div className="text-[10px] text-white/40 px-2">
+                  No review items.
+                </div>
               )}
             </div>
 
             {/* ✅ Today Queue */}
             <div className="mb-3">
               <div className="flex items-center justify-between px-2 mb-2">
-                <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">Today Queue</span>
+                <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">
+                  Today Queue
+                </span>
                 <span className="text-[10px] bg-amber-500/10 text-amber-300 px-2 py-0.5 rounded border border-amber-500/20">
                   {todayQueueJobs.length}
                 </span>
@@ -513,7 +580,9 @@ export default function App() {
               ) : !queueOver ? (
                 <div className="flex flex-col items-center justify-center h-24 glass rounded-2xl border border-dashed border-white/10 opacity-40 mx-1">
                   <CheckCircle2 size={24} className="mb-2" />
-                  <span className="text-[10px] uppercase font-bold tracking-widest">Today Clear</span>
+                  <span className="text-[10px] uppercase font-bold tracking-widest">
+                    Today Clear
+                  </span>
                 </div>
               ) : null}
             </div>
@@ -521,7 +590,9 @@ export default function App() {
             {/* ✅ Waiting Queue */}
             <div className="mt-2">
               <div className="flex items-center justify-between px-2 mb-2">
-                <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">Waiting Queue</span>
+                <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">
+                  Waiting Queue
+                </span>
                 <span className="text-[10px] bg-sky-500/10 text-sky-300 px-2 py-0.5 rounded border border-sky-500/20">
                   {waitingQueueJobs.length}
                 </span>
@@ -543,6 +614,7 @@ export default function App() {
             </div>
 
             {/* NOTE: queueJobs is still computed above and left intact for safety */}
+            {queueJobs.length === 0 ? null : null}
           </div>
         </div>
       </main>
@@ -559,7 +631,9 @@ export default function App() {
             // ✅ CENTRAL truth: stamp warnings before saving
             const finalJob = evaluateJobWarnings(updatedJob);
 
-            setAllJobs((prev) => prev.map((j) => (j.id === finalJob.id ? finalJob : j)));
+            setAllJobs((prev) =>
+              prev.map((j) => (j.id === finalJob.id ? finalJob : j))
+            );
             setSelectedJob(finalJob);
           }}
         />

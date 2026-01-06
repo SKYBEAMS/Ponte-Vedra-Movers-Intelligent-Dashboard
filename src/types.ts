@@ -22,8 +22,11 @@ export enum JobStatus {
   PAID = "PAID",
 }
 
-/** ✅ NEW: warning severity for routing + UI */
+/** ✅ warning severity for routing + UI */
 export type WarningLevel = "none" | "soft" | "hard";
+
+/** ✅ employee check-in state (for SMS automations later) */
+export type CheckInStatus = "ok" | "pending" | "notReplied";
 
 export interface Employee {
   id: string;
@@ -33,12 +36,21 @@ export interface Employee {
   phone: string;
   rank: number;
 
-  // NEW: if true, visually mark them as not available (X / strike-through)
+  // if true, visually mark them as not available
   scheduledOff: boolean;
 
-  // Optional: quick UI warning state (turn yellow)
+  // Optional legacy warning state (keep for compatibility)
   warning?: boolean;
   warningNote?: string;
+
+  // ✅ NEW: structured warnings (truth)
+  warningLevel?: WarningLevel;
+  warningMuted?: boolean;
+
+  // ✅ NEW: check-in tracking
+  checkInStatus?: CheckInStatus;
+  lastCheckInSentAt?: string; // ISO
+  lastCheckInReplyAt?: string; // ISO
 }
 
 export type Job = {
@@ -67,13 +79,13 @@ export type Job = {
   // State
   status: JobStatus;
 
-  /** ✅ Existing warning fields (kept for now) */
-  warning?: boolean;            // ✅ CHANGED: optional (prevents TS breakage)
+  /** Existing warning fields (kept for now) */
+  warning?: boolean;
   warningNote?: string;
 
-  /** ✅ NEW: structured warning (truth) */
-  warningLevel?: WarningLevel;  // "hard" forces Needs Review, "soft" does not
-  warningMuted?: boolean;       // owner can hide the warning badge without losing data
+  /** ✅ structured warning (truth) */
+  warningLevel?: WarningLevel; // "hard" forces Needs Review, "soft" does not
+  warningMuted?: boolean; // owner can hide the warning badge without losing data
 
   // Assignment
   assignedTruckId?: string;
@@ -89,9 +101,13 @@ export interface Truck {
   crewIds: string[];
   jobIds: string[];
 
-  // Optional: quick UI warning state (turn yellow)
+  // Optional legacy warning state (keep for compatibility)
   warning?: boolean;
   warningNote?: string;
+
+  // ✅ NEW: structured warnings (truth)
+  warningLevel?: WarningLevel;
+  warningMuted?: boolean;
 }
 
 /** Drag payload */

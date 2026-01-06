@@ -206,6 +206,11 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
     });
   };
 
+  // ✅ NEW: toggle mute status for warnings
+  const toggleWarningMute = () => {
+    setDraft((prev) => ({ ...prev, warningMuted: !prev.warningMuted }));
+  };
+
   const save = () => {
     const nextStatus = draft.status ?? JobStatus.READY;
 
@@ -429,6 +434,20 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
             className="px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/70 hover:text-white transition-all font-bold"
           >
             Cancel
+          </button>
+
+          {/* ✅ NEW: Mute Toggle Button */}
+          <button
+            onClick={toggleWarningMute}
+            type="button"
+            className={`px-4 py-3 rounded-xl border transition-all font-bold text-xs uppercase tracking-wider ${
+              draft.warningMuted
+                ? "bg-amber-500/10 border-amber-500/40 text-amber-400 hover:bg-amber-500/20"
+                : "bg-white/5 border-white/10 text-white/40 hover:text-white/80 hover:bg-white/10"
+            }`}
+            title="Hide/show warning badge for this job"
+          >
+            {draft.warningMuted ? "Warning Muted" : "Mute Warning"}
           </button>
 
           <button className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/60 hover:text-white transition-all">
