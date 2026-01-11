@@ -15,6 +15,10 @@ import { Job, JobStatus, JobFlag } from "../types";
 import { FLAG_ICONS } from "../constants";
 import { evaluateJobWarnings } from "../utils/jobwarnings";
 
+// ✅ Firestore write-back (source of truth)
+import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "../firebase";
+
 type Props = {
   job: Job | null;
   onClose: () => void;
@@ -81,15 +85,7 @@ function updateIsoTimeKeepDate(existingIso: string, hm: string, ampm: "AM" | "PM
   const t = to24Hour(hm, ampm);
   if (!t) return existingIso;
 
-  const local = new Date(
-    base.getFullYear(),
-    base.getMonth(),
-    base.getDate(),
-    t.hour24,
-    t.minute,
-    0,
-    0
-  );
+  const local = new Date(base.getFullYear(), base.getMonth(), base.getDate(), t.hour24, t.minute, 0, 0);
   return local.toISOString();
 }
 
@@ -146,6 +142,26 @@ function makeFromToLabel(pickup: string, dropoff: string): string {
   const b = shortPlaceLabel(dropoff);
   if (!a && !b) return "";
   return `${a || "—"} → ${b || "—"}`;
+}
+
+// ✅ NEW: Derive scheduledDate + scheduledTime from ISO scheduledArrival
+function isoToScheduledDateTime(iso: string): { scheduledDate: string; scheduledTime: string } {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { scheduledDate: "", scheduledTime: "" };
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const scheduledDate = `${y}-${m}-${day}`;
+
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+
+  const scheduledTime = `${hours}:${minutes} ${ampm}`;
+  return { scheduledDate, scheduledTime };
 }
 
 export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
@@ -211,7 +227,7 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
     setDraft((prev) => ({ ...prev, warningMuted: !prev.warningMuted }));
   };
 
-  const save = () => {
+  const save = async () => {
     const nextStatus = draft.status ?? JobStatus.READY;
 
     // ✅ Always save a clean label for card display
@@ -231,11 +247,20 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
       nextScheduledArrival = updateIsoTimeKeepDate(nextScheduledArrival, timeHm, ampm);
     }
 
+    // ✅ Derive scheduledDate + scheduledTime for new schema
+    const derived = isoToScheduledDateTime(nextScheduledArrival);
+    const scheduledDate = dateValue || derived.scheduledDate;
+    const scheduledTime = timeHm ? timeDerived : derived.scheduledTime;
+
     const updated: Job = {
       ...draft,
       status: nextStatus,
       time: timeDerived || draft.time,
       scheduledArrival: nextScheduledArrival,
+
+      // ✅ New truth helpers stored
+      scheduledDate,
+      scheduledTime,
 
       // ✅ Truth fields stored (full strings)
       pickupAddress: pickupAddress.trim(),
@@ -245,8 +270,42 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
       fromTo: composedFromTo,
     };
 
-    onUpdateJob(evaluateJobWarnings(updated));
-    onClose();
+    const evaluated = evaluateJobWarnings(updated);
+
+    // ✅ UI updates instantly
+    onUpdateJob(evaluated);
+
+    // ✅ Firestore becomes source of truth (fixes refresh snapback)
+    try {
+      const id = evaluated.jobId || (evaluated as any).id;
+      if (!id) throw new Error("Missing jobId/id for Firestore update");
+
+      await updateDoc(doc(db, "jobs", id), {
+        scheduledArrival: evaluated.scheduledArrival || "",
+        scheduledDate: (evaluated as any).scheduledDate || "",
+        scheduledTime: (evaluated as any).scheduledTime || "",
+        time: evaluated.time || "",
+
+        pickupAddress: evaluated.pickupAddress || "",
+        dropoffAddress: evaluated.dropoffAddress || "",
+        fromTo: evaluated.fromTo || "",
+
+        notes: evaluated.notes || "",
+        flags: evaluated.flags || [],
+        status: evaluated.status || "READY",
+
+        warningLevel: (evaluated as any).warningLevel || "none",
+        warningMuted: !!evaluated.warningMuted,
+
+        updatedAt: serverTimestamp(),
+      });
+
+      onClose();
+    } catch (err) {
+      console.error("Failed to update job in Firestore:", err);
+      // Keep modal open if you want; current behavior: stays open only if you remove onClose above
+      // For now we don't close on failure.
+    }
   };
 
   return (
@@ -390,7 +449,7 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
                     key={flag}
                     type="button"
                     onClick={() => toggleFlag(flag)}
-                    className={`px-3 py-2 rounded-xl border text-xs font-bold tracking-wider flex items-center gap-2 transition-all  
+                    className={`px-3 py-2 rounded-xl border text-xs font-bold tracking-wider flex items-center gap-2 transition-all
                       ${
                         active
                           ? "bg-sky-500/20 border-sky-400/40 text-white"

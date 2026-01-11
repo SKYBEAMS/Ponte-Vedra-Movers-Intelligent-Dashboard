@@ -127,7 +127,7 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     hasLicense: false,
     phone: "(904) 555-0108",
     rank: 7,
-    scheduledOff: true,
+    scheduledOff: false, // ✅ fresh screen: only ONE scheduled off
   },
   {
     id: "e9",
@@ -172,7 +172,7 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     hasLicense: false,
     phone: "",
     rank: 3,
-    scheduledOff: true,
+    scheduledOff: false, // ✅ fresh screen: only ONE scheduled off
   },
   {
     id: "e14",
@@ -196,26 +196,26 @@ export const INITIAL_EMPLOYEES: Employee[] = [
    ========================= */
 
 export const INITIAL_TRUCKS: Truck[] = [
-  // 🔴 Fuel critical (<20) + lead notReplied
+  // 🔴 Fuel critical (<20)
   {
     id: "t1",
     name: "Truck 1",
     capacity: 6,
     fuelLevel: 5,
     ready: true,
-    crewIds: ["e3", "e4"], // e3 is lead (rank 10, notReplied)
-    jobIds: ["j_today_warn"],
+    crewIds: [], // ✅ fresh screen: no assignments
+    jobIds: [],  // ✅ fresh screen: no assignments
   },
 
-  // 🟡 Fuel low (20–29)
+  // 🟢 healthy
   {
     id: "t2",
     name: "Truck 2",
     capacity: 6,
-    fuelLevel: 25,
+    fuelLevel: 65,
     ready: true,
-    crewIds: ["e1", "e2"], // has at least one phone (e1)
-    jobIds: ["j_today_clean"],
+    crewIds: [], // ✅ fresh screen
+    jobIds: [],  // ✅ fresh screen
   },
 
   // 🟢 Inactive (dim/neutral)
@@ -229,26 +229,26 @@ export const INITIAL_TRUCKS: Truck[] = [
     jobIds: [],
   },
 
-  // 🔴 Active but not ready
+  // 🟢 healthy
   {
     id: "t4",
     name: "Truck 4",
     capacity: 6,
     fuelLevel: 70,
-    ready: false,
-    crewIds: ["e7"],
-    jobIds: ["j_wait_clean"],
+    ready: true, // ✅ fresh screen: no “not ready” red
+    crewIds: [], // ✅ fresh screen
+    jobIds: [],  // ✅ fresh screen
   },
 
-  // 🔴 Active but nobody has a phone (forces "No phone for check-ins")
+  // 🟢 healthy
   {
     id: "t5",
     name: "Truck 5",
     capacity: 4,
     fuelLevel: 90,
     ready: true,
-    crewIds: ["e2", "e6"], // e2 phone="" and e6 phone missing
-    jobIds: ["j_wait_warn"],
+    crewIds: [], // ✅ fresh screen
+    jobIds: [],  // ✅ fresh screen
   },
 
   // Extra truck stays around (neutral-ish) for visual balance
@@ -280,34 +280,34 @@ export const INITIAL_JOBS: Job[] = [
      TODAY QUEUE (Jan 6)
      ------------------------- */
 
-  // Clean today job (no flags)
+  // Clean today job (no flags) — fresh/blank intake
   {
     id: "j_today_clean",
-    time: "9:00 AM",
-    customerName: "Anderson, Paul",
-    customerPhone: "(904) 123-4567",
-    fromTo: "Jax Bch → PV",
-    pickupAddress: "123 Beach Blvd, Jacksonville Beach, FL",
-    dropoffAddress: "77 A1A N, Ponte Vedra Beach, FL",
+    time: "",
+    customerName: "",
+    customerPhone: "",
+    fromTo: "",
+    pickupAddress: "",
+    dropoffAddress: "",
     flags: [],
-    notes: "Standard move. Confirm gate code if needed.",
+    notes: "",
     status: JobStatus.READY,
     scheduledArrival: "2026-01-06T09:00:00-05:00",
   },
 
-  // Soft warning today job (>= 3 flags)
+  // Soft warning today job (>= 3 flags) — fresh/blank intake
   {
     id: "j_today_warn",
-    time: "11:30 AM",
-    customerName: "Skyline Corp",
-    customerPhone: "(904) 345-6789",
-    fromTo: "Downtown → St. Johns",
-    pickupAddress: "10 W Bay St, Jacksonville, FL",
-    dropoffAddress: "200 County Rd 210 W, St. Johns, FL",
-    flags: [JobFlag.STAIRS, JobFlag.HEAVY, JobFlag.PACKING],
-    notes: "Commercial office move. Confirm staging & crew size.",
+    time: "",
+    customerName: "",
+    customerPhone: "",
+    fromTo: "",
+    pickupAddress: "",
+    dropoffAddress: "",
+    flags: [],
+    notes: "",
     status: JobStatus.READY,
-    warningNote: "Multiple flags (soft warning).",
+    warningNote: "",
     scheduledArrival: "2026-01-06T11:30:00-05:00",
   },
 
@@ -315,34 +315,34 @@ export const INITIAL_JOBS: Job[] = [
      WAITING QUEUE (Future)
      ------------------------- */
 
-  // Clean waiting job (Jan 7)
+  // Clean waiting job (Jan 7) — fresh/blank intake
   {
     id: "j_wait_clean",
-    time: "10:00 AM",
-    customerName: "Baker Residence",
-    customerPhone: "(904) 456-7890",
-    fromTo: "PV → PV South",
-    pickupAddress: "900 Marsh Landing Pkwy, Ponte Vedra Beach, FL",
-    dropoffAddress: "1200 S Ponte Vedra Blvd, Ponte Vedra Beach, FL",
+    time: "",
+    customerName: "",
+    customerPhone: "",
+    fromTo: "",
+    pickupAddress: "",
+    dropoffAddress: "",
     flags: [],
-    notes: "Future-day move. Should sit in Waiting Queue.",
+    notes: "",
     status: JobStatus.READY,
     scheduledArrival: "2026-01-07T10:00:00-05:00",
   },
 
-  // Soft warning waiting job (Jan 8)
+  // Soft warning waiting job (Jan 8) — fresh/blank intake
   {
     id: "j_wait_warn",
-    time: "1:00 PM",
-    customerName: "Gomez, Lisa",
-    customerPhone: "(904) 777-1212",
-    fromTo: "San Marco → Southside",
-    pickupAddress: "1900 Hendricks Ave, Jacksonville, FL",
-    dropoffAddress: "10200 San Jose Blvd, Jacksonville, FL",
-    flags: [JobFlag.MULTI_STOP, JobFlag.PACKING, JobFlag.MULTIPLE_TRUCKS],
-    notes: "Complex move: multi-stop + packing + multiple trucks.",
+    time: "",
+    customerName: "",
+    customerPhone: "",
+    fromTo: "",
+    pickupAddress: "",
+    dropoffAddress: "",
+    flags: [],
+    notes: "",
     status: JobStatus.READY,
-    warningNote: "Complex move (soft warning).",
+    warningNote: "",
     scheduledArrival: "2026-01-08T13:00:00-05:00",
   },
 
@@ -350,35 +350,35 @@ export const INITIAL_JOBS: Job[] = [
      NEEDS REVIEW (Hard)
      ------------------------- */
 
-  // Needs review: missing name (hard)
+  // Needs review: missing name (hard) — keep as blank fresh intake
   {
     id: "j_review_missing_name",
-    time: "3:00 PM",
-    customerName: "", // 🔴 critical missing
-    customerPhone: "(904) 234-5678",
-    fromTo: "Nocatee → Mandarin",
-    pickupAddress: "100 Nocatee Center Way, Ponte Vedra, FL",
-    dropoffAddress: "1234 Mandarin Rd, Jacksonville, FL",
-    flags: [JobFlag.STORAGE],
-    notes: "Should route to Needs Review because name is missing.",
+    time: "",
+    customerName: "",
+    customerPhone: "",
+    fromTo: "",
+    pickupAddress: "",
+    dropoffAddress: "",
+    flags: [],
+    notes: "",
     status: JobStatus.READY,
-    warningNote: "Missing customer name (hard).",
+    warningNote: "",
     scheduledArrival: "2026-01-06T15:00:00-05:00",
   },
 
-  // Needs review: past date (hard) — Jan 5
+  // Needs review: past date (hard) — keep as blank fresh intake
   {
     id: "j_review_past_date",
-    time: "9:00 AM",
-    customerName: "Past Date Client",
-    customerPhone: "(904) 222-2222",
-    fromTo: "Jax → Orange Park",
-    pickupAddress: "1 Old Rd, Jacksonville, FL",
-    dropoffAddress: "99 Old Rd, Orange Park, FL",
+    time: "",
+    customerName: "",
+    customerPhone: "",
+    fromTo: "",
+    pickupAddress: "",
+    dropoffAddress: "",
     flags: [],
-    notes: "Past-date job should be forced into Needs Review.",
+    notes: "",
     status: JobStatus.READY,
-    warningNote: "Past scheduled date (hard).",
+    warningNote: "",
     scheduledArrival: "2026-01-05T09:00:00-05:00",
   },
 ];
@@ -394,5 +394,7 @@ export const FLAG_ICONS: Record<JobFlag, React.ReactNode> = {
   [JobFlag.PIANO]: <Music size={14} className="text-purple-400" />,
   [JobFlag.MULTI_STOP]: <MapPin size={14} className="text-emerald-400" />,
   [JobFlag.PACKING]: <Box size={14} className="text-amber-400" />,
-  [JobFlag.MULTIPLE_TRUCKS]: <TruckIcon size={14} className="text-amber-400" />,
+  [JobFlag.MULTIPLE_TRUCKS]: (
+    <TruckIcon size={14} className="text-amber-400" />
+  ),
 };

@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Users,
   ClipboardList,
@@ -20,10 +20,10 @@ import TruckCard from "./components/TruckCard";
 import JobDetailsModal from "./components/JobDetailsModal";
 
 import { pushHistory, popHistory } from "./utils/history";
-import {
-  evaluateJobWarnings,
-  evaluateJobWarningsResult,
-} from "./utils/jobwarnings";
+import { evaluateJobWarnings, evaluateJobWarningsResult } from "./utils/jobwarnings";
+
+import { collection, onSnapshot, doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { db } from "./firebase";
 
 // ✅ history snapshot type
 type AppStateSnapshot = {
@@ -77,11 +77,72 @@ function hydrateJobs(jobs: Job[]): Job[] {
 function startOfDayMs(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
+
 function safeDateMs(iso?: string): number | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   return startOfDayMs(d);
+}
+
+/**
+ * ✅ Firestore legacy fix:
+ * - Some docs store scheduledArrival as "9:00 AM" (time text)
+ * - UI needs scheduledArrival to be ISO for date picker logic
+ * - We coerce to ISO using updatedAt/createdAt when possible, otherwise today
+ * - We also recover "time" from scheduledArrival if needed
+ */
+function isIsoDateString(s: any): s is string {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}T/.test(s);
+}
+
+function isTimeText(s: any): s is string {
+  return typeof s === "string" && /^\s*\d{1,2}:\d{2}\s*(AM|PM)\s*$/i.test(s);
+}
+
+function pickDocDateIso(data: any): string {
+  const ts = data?.updatedAt || data?.createdAt;
+
+  // Firestore Timestamp
+  if (ts && typeof ts.toDate === "function") {
+    const d = ts.toDate();
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+
+  // Any parseable date string (ISO or not)
+  if (typeof ts === "string") {
+    const d = new Date(ts);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+
+  // Fallback
+  return new Date().toISOString();
+}
+
+function coerceScheduledArrivalIso(data: any): { scheduledArrivalIso: string; timeText: string } {
+  const raw = data?.scheduledArrival;
+
+  // best case: already ISO datetime
+  if (isIsoDateString(raw)) {
+    return {
+      scheduledArrivalIso: raw,
+      timeText: typeof data?.time === "string" ? data.time : "",
+    };
+  }
+
+  // legacy: scheduledArrival is actually "9:00 AM"
+  if (isTimeText(raw)) {
+    return {
+      scheduledArrivalIso: pickDocDateIso(data),
+      timeText: raw.trim(),
+    };
+  }
+
+  // fallback: if scheduledArrival is missing/invalid, still provide an ISO date
+  return {
+    scheduledArrivalIso: pickDocDateIso(data),
+    timeText: typeof data?.time === "string" ? data.time : "",
+  };
 }
 
 export default function App() {
@@ -91,11 +152,67 @@ export default function App() {
   const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
 
   /** ✅ initial jobs hydrated once + warnings stamped once */
-  const [allJobs, setAllJobs] = useState<Job[]>(
-    hydrateJobs(INITIAL_JOBS).map(evaluateJobWarnings)
-  );
+  const [allJobs, setAllJobs] = useState<Job[]>([]);
 
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "jobs"), (snapshot) => {
+      console.log("🔥 SNAPSHOT DOC IDS:", snapshot.docs.map((d) => d.id));
+
+      const jobs = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data();
+
+        const { scheduledArrivalIso, timeText } = coerceScheduledArrivalIso(data);
+
+        // ✅ Only use data.time if it is a non-empty string; otherwise fall back to recovered timeText
+        const rawTime = (data as any).time;
+        const finalTime =
+          typeof rawTime === "string" && rawTime.trim().length > 0
+            ? rawTime
+            : (timeText || "");
+
+        console.log("📌 DOC COERCE:", docSnap.id, {
+          rawScheduledArrival: (data as any).scheduledArrival,
+          rawTime: (data as any).time,
+          rawUpdatedAt: (data as any).updatedAt,
+          rawCreatedAt: (data as any).createdAt,
+          coercedIso: scheduledArrivalIso,
+          coercedTimeText: timeText,
+          finalTime,
+        });
+
+        return evaluateJobWarnings({
+          id: docSnap.id,
+          jobId: (data as any).jobId ?? docSnap.id,
+          source: (data as any).source ?? "",
+
+          // ✅ FIX: scheduledArrival is ALWAYS ISO for the date picker
+          scheduledArrival: scheduledArrivalIso,
+
+          // ✅ FIX: time is ALWAYS a human time string if we have it
+          time: finalTime,
+
+          status: (data as any).status ?? JobStatus.READY,
+          customerName: (data as any).customerName ?? "",
+          customerPhone: (data as any).customerPhone ?? "",
+          pickupAddress: (data as any).pickupAddress ?? "",
+          dropoffAddress: (data as any).dropoffAddress ?? "",
+
+          flags: Array.isArray((data as any).flags) ? (data as any).flags : [],
+          notes: (data as any).notes ?? "",
+          warningLevel: (data as any).warningLevel ?? "none",
+          warningMuted: (data as any).warningMuted ?? false,
+          paidStatus: (data as any).paidStatus ?? "UNKNOWN",
+          contractFileUrl: (data as any).contractFileUrl ?? null,
+        });
+      });
+
+      setAllJobs(hydrateJobs(jobs));
+    });
+
+    return () => unsub();
+  }, []);
 
   // ✅ typed history
   const [history, setHistory] = useState<AppStateSnapshot[]>([]);
@@ -123,9 +240,7 @@ export default function App() {
 
   // ✅ TRUE Needs Review: use ONE evaluator (hard == needs review)
   const needsReviewJobs = useMemo(() => {
-    return unassignedJobs.filter(
-      (j) => evaluateJobWarningsResult(j).level === "hard"
-    );
+    return unassignedJobs.filter((j) => evaluateJobWarningsResult(j).level === "hard");
   }, [unassignedJobs]);
 
   const needsReviewIds = useMemo(() => {
@@ -177,9 +292,7 @@ export default function App() {
     if (!last) return;
 
     const snapshot =
-      (last as any).trucks && (last as any).allJobs
-        ? last
-        : (last as any)?.state ?? last;
+      (last as any).trucks && (last as any).allJobs ? last : (last as any)?.state ?? last;
     if (!snapshot) return;
 
     setTrucks(snapshot.trucks);
@@ -218,9 +331,7 @@ export default function App() {
     (jobId: string) => {
       saveHistory();
       setAllJobs((prev) =>
-        prev.map((j) =>
-          j.id === jobId ? { ...j, warningMuted: !j.warningMuted } : j
-        )
+        prev.map((j) => (j.id === jobId ? { ...j, warningMuted: !j.warningMuted } : j))
       );
     },
     [saveHistory]
@@ -231,9 +342,7 @@ export default function App() {
     (truckId: string) => {
       saveHistory();
       setTrucks((prev) =>
-        prev.map((t) =>
-          t.id === truckId ? { ...t, warningMuted: !t.warningMuted } : t
-        )
+        prev.map((t) => (t.id === truckId ? { ...t, warningMuted: !t.warningMuted } : t))
       );
     },
     [saveHistory]
@@ -264,15 +373,11 @@ export default function App() {
 
       if (dragItem.type === "employee") {
         if (target.crewIds.length >= target.capacity) return prevTrucks;
-        if (source)
-          source.crewIds = source.crewIds.filter((id) => id !== dragItem.id);
-        if (!target.crewIds.includes(dragItem.id))
-          target.crewIds.push(dragItem.id);
+        if (source) source.crewIds = source.crewIds.filter((id) => id !== dragItem.id);
+        if (!target.crewIds.includes(dragItem.id)) target.crewIds.push(dragItem.id);
       } else {
-        if (source)
-          source.jobIds = source.jobIds.filter((id) => id !== dragItem.id);
-        if (!target.jobIds.includes(dragItem.id))
-          target.jobIds.push(dragItem.id);
+        if (source) source.jobIds = source.jobIds.filter((id) => id !== dragItem.id);
+        if (!target.jobIds.includes(dragItem.id)) target.jobIds.push(dragItem.id);
 
         setAllJobs((prev) =>
           prev.map((j) =>
@@ -388,11 +493,7 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-white tron-grid overflow-hidden relative">
-      <TopNav
-        onUndo={handleUndo}
-        canUndo={history.length > 0}
-        onRefresh={handleRefresh}
-      />
+      <TopNav onUndo={handleUndo} canUndo={history.length > 0} onRefresh={handleRefresh} />
 
       <main className="flex-1 flex overflow-hidden pt-16 p-6 space-x-6">
         {/* Left Column: Employees (Roster) */}
@@ -548,9 +649,7 @@ export default function App() {
                   />
                 ))
               ) : (
-                <div className="text-[10px] text-white/40 px-2">
-                  No review items.
-                </div>
+                <div className="text-[10px] text-white/40 px-2">No review items.</div>
               )}
             </div>
 
@@ -631,9 +730,7 @@ export default function App() {
             // ✅ CENTRAL truth: stamp warnings before saving
             const finalJob = evaluateJobWarnings(updatedJob);
 
-            setAllJobs((prev) =>
-              prev.map((j) => (j.id === finalJob.id ? finalJob : j))
-            );
+            setAllJobs((prev) => prev.map((j) => (j.id === finalJob.id ? finalJob : j)));
             setSelectedJob(finalJob);
           }}
         />
