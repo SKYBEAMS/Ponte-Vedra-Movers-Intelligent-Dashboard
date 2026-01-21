@@ -43,11 +43,11 @@ export interface Employee {
   warning?: boolean;
   warningNote?: string;
 
-  // ✅ NEW: structured warnings (truth)
+  // ✅ structured warnings (truth)
   warningLevel?: WarningLevel;
   warningMuted?: boolean;
 
-  // ✅ NEW: check-in tracking
+  // ✅ check-in tracking
   checkInStatus?: CheckInStatus;
   lastCheckInSentAt?: string; // ISO
   lastCheckInReplyAt?: string; // ISO
@@ -108,6 +108,9 @@ export interface Truck {
   // ✅ NEW: structured warnings (truth)
   warningLevel?: WarningLevel;
   warningMuted?: boolean;
+
+  // ✅ manual override for lead / point of contact
+  pointOfContactId?: string | null;
 }
 
 /** Drag payload */
@@ -116,3 +119,13 @@ export interface DragItem {
   id: string;
   sourceTruckId?: string;
 }
+
+export type EmployeeNote = {
+  id: string;
+  text: string;
+  createdAt: any; // Timestamp | null OK for now
+  createdBy?: string | null;
+  truckId?: string | null;
+  tags?: string[];
+  scheduleIntent?: boolean;
+};

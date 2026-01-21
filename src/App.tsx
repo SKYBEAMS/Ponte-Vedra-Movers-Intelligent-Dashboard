@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { Job, Truck, DragItem, JobStatus, Employee } from "./types";
+import type { EmployeeNote } from "./types";
 import { INITIAL_EMPLOYEES, INITIAL_TRUCKS, INITIAL_JOBS } from "./constants";
 
 import TopNav from "./components/TopNav";
@@ -18,18 +19,25 @@ import EmployeeCard from "./components/EmployeeCard";
 import JobCard from "./components/JobCard";
 import TruckCard from "./components/TruckCard";
 import JobDetailsModal from "./components/JobDetailsModal";
+import EmployeeDetailsModal from "./components/EmployeeDetailsModal";
 
 import { pushHistory, popHistory } from "./utils/history";
 import { evaluateJobWarnings, evaluateJobWarningsResult } from "./utils/jobwarnings";
 
-import { collection, onSnapshot, doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 import { db } from "./firebase";
+
+// ✅ NEW: Firestore employees hook
+import { useEmployees } from "./hooks/useEmployees";
+import { pickLeadAndContact } from "./utils/pickLeadAndContact";
+import { updateTruck } from "./firestore/trucks";
+import { addEmployeeNote, listenEmployeeNotes } from "./firestore/employeeNotes";
+import { addDispatchEvent } from "./firestore/dispatchEvents";
 
 // ✅ history snapshot type
 type AppStateSnapshot = {
   trucks: Truck[];
   allJobs: Job[];
-  employees: Employee[];
 };
 
 const cloneTrucks = (trucks: Truck[]): Truck[] =>
@@ -156,6 +164,68 @@ export default function App() {
 
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
 
+  // ✅ NEW: Employee detail modal state
+  const [employeeModal, setEmployeeModal] = useState<{
+    open: boolean;
+    employee: Employee | null;
+    truckId: string | null;
+  }>({
+    open: false,
+    employee: null,
+    truckId: null,
+  });
+
+  // ✅ NEW: Employee notes state
+  const [employeeNotes, setEmployeeNotes] = useState<EmployeeNote[]>([]);
+
+  // ✅ NEW: Open/close helpers
+  const openEmployeeModal = (employee: Employee, truckId: string | null) => {
+    setEmployeeModal({ open: true, employee, truckId });
+  };
+
+  const closeEmployeeModal = () => {
+    setEmployeeModal({ open: false, employee: null, truckId: null });
+  };
+
+  // ✅ NEW: Set point of contact on truck (with Firestore persistence)
+  const setPointOfContact = (truckId: string, employeeId: string | null) => {
+    // 1) UI immediately
+    setTrucks((prev) =>
+      prev.map((t) =>
+        t.id === truckId ? { ...t, pointOfContactId: employeeId } : t
+      )
+    );
+
+    // 2) Firestore persistence (no lag)
+    updateTruck(truckId, { pointOfContactId: employeeId }).catch(console.error);
+  };
+
+  const { employees: fsEmployees, loading: employeesLoading, error: employeesError } = useEmployees();
+
+  const employeesSource = fsEmployees.length ? fsEmployees : INITIAL_EMPLOYEES;
+
+  useEffect(() => {
+    if (!employeesLoading) {
+      console.log("🔥 Firestore employees:", fsEmployees);
+    }
+  }, [employeesLoading, fsEmployees]);
+
+  useEffect(() => {
+    if (employeesError) {
+      console.error("❌ Firestore employees error:", employeesError);
+    }
+  }, [employeesError]);
+
+  useEffect(() => {
+    console.log("👥 employeesSource:", {
+      fsCount: fsEmployees.length,
+      using: fsEmployees.length ? "firestore" : "constants",
+      employeesLoading,
+      employeesError,
+    });
+  }, [fsEmployees.length, employeesLoading, employeesError]);
+
+
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "jobs"), (snapshot) => {
       console.log("🔥 SNAPSHOT DOC IDS:", snapshot.docs.map((d) => d.id));
@@ -219,8 +289,8 @@ export default function App() {
 
   const rosterEmployees = useMemo(() => {
     const assignedIds = new Set(trucks.flatMap((t) => t.crewIds));
-    return employees.filter((e) => !assignedIds.has(e.id));
-  }, [trucks, employees]);
+    return employeesSource.filter((e) => !assignedIds.has(e.id));
+  }, [trucks, employeesSource]);
 
   // ✅ assigned job IDs (jobs already on trucks)
   const assignedJobIds = useMemo(() => {
@@ -274,15 +344,13 @@ export default function App() {
       pushHistory(prev, {
         trucks: cloneTrucks(trucks),
         allJobs: cloneJobs(allJobs),
-        employees: cloneEmployees(employees),
       } as AppStateSnapshot)
     );
-  }, [trucks, allJobs, employees]);
+  }, [trucks, allJobs]);
 
   const handleRefresh = useCallback(() => {
     setHistory([]);
     setTrucks(INITIAL_TRUCKS);
-    setEmployees(INITIAL_EMPLOYEES);
     setAllJobs(hydrateJobs(INITIAL_JOBS).map(evaluateJobWarnings));
     setSelectedJob(null);
   }, []);
@@ -297,7 +365,6 @@ export default function App() {
 
     setTrucks(snapshot.trucks);
     setAllJobs(snapshot.allJobs);
-    if (snapshot.employees) setEmployees(snapshot.employees);
 
     setSelectedJob((prev) => {
       if (!prev) return null;
@@ -348,7 +415,7 @@ export default function App() {
     [saveHistory]
   );
 
-  const handleDropOnTruck = (e: React.DragEvent, targetTruckId: string) => {
+  const handleDropOnTruck = useCallback((e: React.DragEvent, targetTruckId: string) => {
     const rawData = e.dataTransfer.getData("application/json");
     if (!rawData) return;
     const dragItem: DragItem = JSON.parse(rawData);
@@ -373,6 +440,21 @@ export default function App() {
 
       if (dragItem.type === "employee") {
         if (target.crewIds.length >= target.capacity) return prevTrucks;
+
+        console.log("DROP EMP DEBUG", {
+          dragId: dragItem.id,
+          employeesSourceIds: employeesSource.map((e) => e.id),
+          targetTruckId,
+          beforeCrewIds: target.crewIds,
+        });
+
+        // ✅ Firestore safety: don't allow assigning an employee id that doesn't exist
+        const exists = employeesSource.some((e) => e.id === dragItem.id);
+        if (!exists) {
+           console.warn("Tried to assign unknown employee id:", dragItem.id);
+           return prevTrucks;
+        }
+
         if (source) source.crewIds = source.crewIds.filter((id) => id !== dragItem.id);
         if (!target.crewIds.includes(dragItem.id)) target.crewIds.push(dragItem.id);
       } else {
@@ -394,7 +476,7 @@ export default function App() {
 
       return nextTrucks;
     });
-  };
+  }, [saveHistory, employeesSource]);
 
   const handleDropOnRoster = (e: React.DragEvent) => {
     const rawData = e.dataTransfer.getData("application/json");
@@ -491,6 +573,38 @@ export default function App() {
   const [rosterOver, setRosterOver] = useState(false);
   const [queueOver, setQueueOver] = useState(false);
 
+  // ✅ NEW: Add employee note handler
+  const handleAddEmployeeNote = async (text: string) => {
+    const empId = employeeModal?.employee?.id;
+    if (!empId) return;
+
+    const clean = text.trim();
+    if (!clean) return;
+
+    try {
+      // 1) Save the source-of-truth note (returns noteId)
+      const noteId = await addEmployeeNote(empId, {
+        text: clean,
+        truckId: employeeModal?.truckId ?? null,
+        createdBy: null,
+        tags: [],
+        scheduleIntent: false,
+      });
+
+      // 2) Emit one backend-friendly event for automation
+      await addDispatchEvent({
+        type: "EMPLOYEE_NOTE_ADDED",
+        employeeId: empId,
+        employeeName: employeeModal.employee?.name ?? null,
+        truckId: employeeModal?.truckId ?? null,
+        noteId,
+        text: clean,
+      });
+    } catch (err) {
+      console.error("handleAddEmployeeNote failed:", err);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-white tron-grid overflow-hidden relative">
       <TopNav onUndo={handleUndo} canUndo={history.length > 0} onRefresh={handleRefresh} />
@@ -536,6 +650,7 @@ export default function App() {
                 employee={emp}
                 onDragStart={handleDragStart}
                 onDragEnd={handleDragEnd}
+                onClick={() => openEmployeeModal(emp, null)}
               />
             ))}
           </div>
@@ -544,20 +659,48 @@ export default function App() {
         {/* Center Column: Trucks */}
         <div className="flex-1 flex flex-col space-y-6 overflow-y-auto no-scrollbar">
           <div className="grid grid-cols-3 gap-6">
-            {trucks.map((truck) => (
-              <TruckCard
-                key={truck.id}
-                truck={truck}
-                crew={employees.filter((e) => truck.crewIds.includes(e.id))}
-                jobs={allJobs.filter((j) => truck.jobIds.includes(j.id))}
-                onDrop={handleDropOnTruck}
-                onDragStart={handleDragStart}
-                onDragEnd={handleDragEnd}
-                onViewJobDetails={setSelectedJob}
-                // ✅ ADDED THIS LINE to pass the function down
-                onToggleTruckMute={toggleTruckWarningMute}
-              />
-            ))}
+            {trucks.map((truck) => {
+              const crew = employeesSource.filter((e) =>
+                truck.crewIds.includes(e.id)
+              );
+
+              // 3) App.tsx: make the highlight use the override
+              const override = truck.pointOfContactId
+                ? crew.find(
+                    (e) =>
+                      e.id === truck.pointOfContactId &&
+                      (e.phone ?? "").trim().length > 0
+                  ) ?? null
+                : null;
+
+              const { lead } = pickLeadAndContact(crew);
+              const finalLead = override ?? lead;
+
+              console.log("PICK DEBUG", truck.id, {
+                crew: crew.map((c) => ({ name: c.name, phone: c.phone, rank: c.rank })),
+                lead: lead?.name,
+                leadId: lead?.id,
+                override: override?.name,
+              });
+
+              return (
+                <TruckCard
+                  key={truck.id}
+                  truck={truck}
+                  crew={crew}
+                  // Pass the final computed lead
+                  leadId={finalLead?.id ?? null}
+                  contactId={null} // Future Phase: contactId
+                  jobs={allJobs.filter((j) => truck.jobIds.includes(j.id))}
+                  onDrop={handleDropOnTruck}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onEmployeeClick={(emp, truckId) => openEmployeeModal(emp, truckId)}
+                  onViewJobDetails={setSelectedJob}
+                  onToggleTruckMute={toggleTruckWarningMute}
+                />
+              );
+            })}
           </div>
 
           <div className="glass p-4 rounded-2xl border border-sky-500/20 flex items-center justify-between shadow-2xl">
@@ -720,7 +863,7 @@ export default function App() {
 
       <div className="fixed bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-sky-500 to-transparent opacity-50 shadow-[0_-4px_20px_rgba(14,165,233,0.5)]"></div>
 
-      {selectedJob && (
+            {selectedJob && (
         <JobDetailsModal
           job={selectedJob}
           onClose={() => setSelectedJob(null)}
@@ -735,6 +878,26 @@ export default function App() {
           }}
         />
       )}
+
+      {/* ✅ NEW: Employee details modal with notes */}
+      <EmployeeDetailsModal
+        open={employeeModal.open}
+        employee={employeeModal.employee}
+        onClose={closeEmployeeModal}
+        // ✅ NEW: pass the setter
+        onSetPointOfContact={(empId) =>
+          employeeModal.truckId && setPointOfContact(employeeModal.truckId, empId)
+        }
+        isPointOfContact={
+          // Calculate if this employee is currently the PoC for the truck they were clicked on
+          !!employeeModal.truckId &&
+          trucks.find((t) => t.id === employeeModal.truckId)?.pointOfContactId ===
+            employeeModal.employee?.id
+        }
+        // ✅ NEW: pass notes and handler
+        notes={employeeNotes}
+        onAddNote={handleAddEmployeeNote}
+      />
     </div>
   );
 }

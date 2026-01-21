@@ -1,5 +1,5 @@
 // src/components/TruckCard.tsx
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -27,6 +27,9 @@ type TruckCardProps = {
   onDragEnd?: (e: React.DragEvent) => void;
   onViewJobDetails: (job: Job) => void;
   onToggleTruckMute: (truckId: string) => void;
+  onEmployeeClick?: (emp: Employee, truckId: string) => void;
+  leadId?: string | null;
+  contactId?: string | null;
 };
 
 export default function TruckCard({
@@ -38,22 +41,21 @@ export default function TruckCard({
   onDragEnd,
   onViewJobDetails,
   onToggleTruckMute,
+  onEmployeeClick,
+  leadId = null,
+  contactId = null,
 }: TruckCardProps) {
+  console.log("TRUCK VIEW", truck.id, {
+    crewIds: truck.crewIds,
+    crewResolved: crew.map((c) => c.id),
+  });
+
   const [isOver, setIsOver] = useState(false);
   const isFull = crew.length >= truck.capacity;
 
   const active = crew.length > 0 || jobs.length > 0;
 
-  // ✅ UPDATED: Lead = highest rank (prioritizing phone holders)
-  // Matches logic in truckWarnings.ts
-  const leadEmployee = useMemo(() => {
-    if (crew.length === 0) return null;
-
-    const withPhone = crew.filter((p) => (p.phone ?? "").trim().length > 0);
-    const pool = withPhone.length > 0 ? withPhone : crew;
-
-    return [...pool].sort((a, b) => (b.rank ?? 0) - (a.rank ?? 0))[0];
-  }, [crew]);
+  // ✅ DELETED: leadEmployee useMemo block is gone.
 
   const warning = evaluateTruckWarnings(truck, { crew, jobsCount: jobs.length });
   const muted = truck.warningMuted === true;
@@ -73,7 +75,6 @@ export default function TruckCard({
     onDrop(e, truck.id);
   };
 
-  // Base border color (normal vs warning) + dim when not active
   const baseBorder = showWarning
     ? truckHard
       ? "border-rose-500/45"
@@ -134,7 +135,6 @@ export default function TruckCard({
         </div>
 
         <div className="flex items-center space-x-3">
-          {/* Mute Button */}
           <button
             type="button"
             onClick={(e) => {
@@ -191,7 +191,8 @@ export default function TruckCard({
                 isFull ? "text-rose-400" : "text-sky-400"
               }`}
             >
-              <Users size={12} className="mr-1" /> Crew ({crew.length}/{truck.capacity})
+              <Users size={12} className="mr-1" /> Crew ({crew.length}/
+              {truck.capacity})
             </h3>
           </div>
 
@@ -201,7 +202,7 @@ export default function TruckCard({
             }`}
           >
             {crew.map((person) => {
-              const isLead = person.id === leadEmployee?.id;
+              const isLead = !!leadId && person.id === leadId;
 
               return (
                 <div
@@ -209,16 +210,23 @@ export default function TruckCard({
                   draggable
                   onDragStart={(e) => onDragStart(e, person.id, "employee", truck.id)}
                   onDragEnd={onDragEnd}
+                  onClick={() => onEmployeeClick?.(person, truck.id)}
                   className={`group relative h-10 w-10 rounded-full flex items-center justify-center text-xs font-bold transition-all cursor-grab active:cursor-grabbing shadow-lg shadow-sky-900/20 ${
                     isLead
-                      ? "bg-sky-400 text-slate-950 border-2 border-white shadow-[0_0_15px_rgba(56,189,248,0.5)] z-10"
+                      ? "bg-emerald-400 text-slate-950 border-2 border-white shadow-[0_0_15px_rgba(52,211,153,0.5)] z-10"
                       : "bg-sky-500/20 border border-sky-500/40 text-white hover:bg-sky-500 hover:border-sky-300"
                   }`}
-                  title={isLead ? `Lead: ${person.name} (SMS Handler)` : person.name}
+                  title={
+                    isLead
+                      ? `Lead: ${person.name}`
+                      : person.name
+                  }
                 >
                   {person.initials}
+
+                  {/* Lead badge */}
                   {isLead && (
-                    <div className="absolute -bottom-1 -right-1 bg-white text-sky-600 rounded-full p-0.5 border border-sky-400 scale-75">
+                    <div className="absolute -bottom-1 -right-1 bg-white text-emerald-700 rounded-full p-0.5 border border-emerald-400 scale-75">
                       <PhoneCall size={10} />
                     </div>
                   )}
@@ -229,7 +237,9 @@ export default function TruckCard({
             {crew.length === 0 && (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/10 py-6">
                 <Users size={20} className="mb-1" />
-                <span className="text-[8px] uppercase tracking-tighter">Assign Crew</span>
+                <span className="text-[8px] uppercase tracking-tighter">
+                  Assign Crew
+                </span>
               </div>
             )}
           </div>
@@ -258,7 +268,9 @@ export default function TruckCard({
             {jobs.length === 0 && (
               <div className="w-full h-full flex flex-col items-center justify-center text-white/10 py-6">
                 <ClipboardList size={20} className="mb-1" />
-                <span className="text-[8px] uppercase tracking-tighter">Drop Contract</span>
+                <span className="text-[8px] uppercase tracking-tighter">
+                  Drop Contract
+                </span>
               </div>
             )}
           </div>
@@ -267,7 +279,6 @@ export default function TruckCard({
 
       {/* Footer Flags */}
       <div className="bg-sky-950/20 p-2 px-3 border-t border-white/5 flex items-center space-x-3 overflow-x-auto no-scrollbar">
-        {/* Fuel */}
         {active && fuelBand === "critical" && (
           <div className="flex items-center space-x-1 text-rose-400 text-[9px] font-bold whitespace-nowrap bg-rose-500/10 px-1.5 py-0.5 rounded">
             <AlertCircle size={10} />
@@ -282,7 +293,6 @@ export default function TruckCard({
           </div>
         )}
 
-        {/* Truck readiness */}
         {active && truck.ready === false && (
           <div className="flex items-center space-x-1 text-rose-300 text-[9px] font-bold whitespace-nowrap bg-rose-500/10 px-1.5 py-0.5 rounded">
             <AlertCircle size={10} />
@@ -290,7 +300,6 @@ export default function TruckCard({
           </div>
         )}
 
-        {/* Evaluator note (optional) */}
         {active && showWarning && warning.warningNote && (
           <div className="flex items-center space-x-1 text-sky-300 text-[9px] font-bold whitespace-nowrap bg-sky-500/10 px-1.5 py-0.5 rounded">
             <AlertCircle size={10} />

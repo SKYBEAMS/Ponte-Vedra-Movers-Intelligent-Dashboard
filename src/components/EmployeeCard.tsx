@@ -13,6 +13,7 @@ type Props = {
   ) => void;
   onDragEnd?: (e: React.DragEvent) => void;
   sourceTruckId?: string;
+  onClick?: () => void;
 };
 
 export default function EmployeeCard({
@@ -20,6 +21,7 @@ export default function EmployeeCard({
   onDragStart,
   onDragEnd,
   sourceTruckId,
+  onClick,
 }: Props) {
   const isScheduledOff = employee.scheduledOff === true;
   const isAssigned = !!sourceTruckId; // if it came from a truck list, it's assigned
@@ -58,6 +60,7 @@ export default function EmployeeCard({
         onDragStart(e, employee.id, "employee", sourceTruckId);
       }}
       onDragEnd={onDragEnd}
+      onClick={onClick}
       className={`group relative mb-3 p-3 glass border rounded-xl transition-all duration-300 ${borderClass} ${cursorClass}`}
       title={showWarning && warningNote ? warningNote : undefined}
     >
