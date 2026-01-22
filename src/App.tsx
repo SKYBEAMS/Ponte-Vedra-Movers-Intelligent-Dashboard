@@ -8,6 +8,8 @@ import {
   Plus,
   CheckCircle2,
   AlertTriangle,
+  Clock,
+  Inbox,
 } from "lucide-react";
 
 import { Job, Truck, DragItem, JobStatus, Employee } from "./types";
@@ -38,6 +40,22 @@ import { addEmployeeNote, listenEmployeeNotes } from "./firestore/employeeNotes"
 import { addDispatchEvent } from "./firestore/dispatchEvents";
 import { addQuickNote } from "./firestore/quickNotes";
 import { subscribeAttentionCounts } from "./firestore/attentionItems";
+
+// ✅ 1️⃣ Semantic status config for queue sections
+const QUEUE_STYLES = {
+  today: {
+    color: "#16a34a",        // green
+    icon: "●",
+  },
+  needsReview: {
+    color: "#dc2626",        // red
+    icon: "●",
+  },
+  waiting: {
+    color: "#f59e0b",        // amber
+    icon: "●",
+  },
+};
 
 // ✅ history snapshot type
 type AppStateSnapshot = {
@@ -841,14 +859,10 @@ export default function App() {
         {/* Right Column: Queue */}
         <div className="w-[320px] flex flex-col">
           <div className="flex items-center justify-between mb-4 px-2">
-            <div className="flex items-center gap-2">
-              <h2 className="font-tech text-xs font-bold text-sky-400 uppercase tracking-[0.2em] flex items-center">
-                <ClipboardList size={16} className="mr-2" /> Job Queue
-              </h2>
-              <span className="text-[10px] bg-sky-500/10 text-sky-300 px-2 py-0.5 rounded border border-sky-500/20">
-                {/* count will be added dynamically */}
-              </span>
-            </div>
+            <div className="w-6"></div>
+            <h2 className="font-tech text-xs font-bold text-sky-400 uppercase tracking-[0.2em]">
+              Job Queue
+            </h2>
             <button
               onClick={addJob}
               className="p-1.5 bg-sky-500/10 border border-sky-500/30 rounded text-sky-400 hover:bg-sky-500 hover:text-white transition-all"
@@ -881,96 +895,80 @@ export default function App() {
               </div>
             )}
 
-            {/* ✅ Needs Review */}
-            <div className="mb-3">
-              <div className="flex items-center gap-2 px-2 mb-2">
-                <span className="text-[10px] font-bold text-amber-300/90 tracking-widest uppercase flex items-center gap-2">
-                  <AlertTriangle size={14} className="text-amber-300/90" />
-                  Needs Review
-                </span>
-                <span className="text-[10px] bg-amber-500/10 text-amber-300 px-2 py-0.5 rounded border border-amber-500/20">
-                  {needsReviewJobs.length}
-                </span>
-              </div>
-
-              {needsReviewJobs.length > 0 ? (
-                needsReviewJobs.map((job) => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onViewDetails={setSelectedJob}
-                    onDelete={deleteJob}
-                    onToggleWarningMute={toggleJobWarningMute}
-                  />
-                ))
-              ) : (
-                <div className="text-[10px] text-white/40 px-2">No review items.</div>
-              )}
-            </div>
-
             {/* ✅ Today Queue */}
-            <div className="mb-3">
+            <div className="mb-2">
               <div className="flex items-center gap-2 px-2 mb-2">
-                <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">
+                <Clock size={14} style={{ color: QUEUE_STYLES.today.color }} />
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: QUEUE_STYLES.today.color }}>
                   Today Queue
                 </span>
-                <span className="text-[10px] bg-amber-500/10 text-amber-300 px-2 py-0.5 rounded border border-amber-500/20">
+                <span className="text-[10px] px-2 py-0.5 rounded border" style={{ backgroundColor: `${QUEUE_STYLES.today.color}20`, color: QUEUE_STYLES.today.color, borderColor: `${QUEUE_STYLES.today.color}50` }}>
                   {todayQueueJobs.length}
                 </span>
               </div>
 
-              {todayQueueJobs.length > 0 ? (
-                todayQueueJobs.map((job) => (
-                  <JobCard
-                    key={job.id}
-                    job={job}
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onViewDetails={setSelectedJob}
-                    onDelete={deleteJob}
-                    onToggleWarningMute={toggleJobWarningMute}
-                  />
-                ))
-              ) : !queueOver ? (
-                <div className="flex flex-col items-center justify-center h-24 glass rounded-2xl border border-dashed border-white/10 opacity-40 mx-1">
-                  <CheckCircle2 size={24} className="mb-2" />
-                  <span className="text-[10px] uppercase font-bold tracking-widest">
-                    Today Clear
-                  </span>
-                </div>
-              ) : null}
+              {todayQueueJobs.map((job) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onViewDetails={setSelectedJob}
+                  onDelete={deleteJob}
+                  onToggleWarningMute={toggleJobWarningMute}
+                />
+              ))}
+            </div>
+
+            {/* ✅ Needs Review */}
+            <div className="mb-2">
+              <div className="flex items-center gap-2 px-2 mb-2">
+                <AlertTriangle size={14} style={{ color: QUEUE_STYLES.needsReview.color }} />
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: QUEUE_STYLES.needsReview.color }}>
+                  Needs Review
+                </span>
+                <span className="text-[10px] px-2 py-0.5 rounded border" style={{ backgroundColor: `${QUEUE_STYLES.needsReview.color}20`, color: QUEUE_STYLES.needsReview.color, borderColor: `${QUEUE_STYLES.needsReview.color}50` }}>
+                  {needsReviewJobs.length}
+                </span>
+              </div>
+
+              {needsReviewJobs.map((job) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onViewDetails={setSelectedJob}
+                  onDelete={deleteJob}
+                  onToggleWarningMute={toggleJobWarningMute}
+                />
+              ))}
             </div>
 
             {/* ✅ Waiting Queue */}
-            <div className="mt-2">
+            <div className="mb-2">
               <div className="flex items-center gap-2 px-2 mb-2">
-                <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">
+                <Inbox size={14} style={{ color: QUEUE_STYLES.waiting.color }} />
+                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: QUEUE_STYLES.waiting.color }}>
                   Waiting Queue
                 </span>
-                <span className="text-[10px] bg-sky-500/10 text-sky-300 px-2 py-0.5 rounded border border-sky-500/20">
+                <span className="text-[10px] px-2 py-0.5 rounded border" style={{ backgroundColor: `${QUEUE_STYLES.waiting.color}20`, color: QUEUE_STYLES.waiting.color, borderColor: `${QUEUE_STYLES.waiting.color}50` }}>
                   {waitingQueueJobs.length}
                 </span>
               </div>
 
-              {waitingQueueJobs.length > 0
-                ? waitingQueueJobs.map((job) => (
-                    <JobCard
-                      key={job.id}
-                      job={job}
-                      onDragStart={handleDragStart}
-                      onDragEnd={handleDragEnd}
-                      onViewDetails={setSelectedJob}
-                      onDelete={deleteJob}
-                      onToggleWarningMute={toggleJobWarningMute}
-                    />
-                  ))
-                : null}
+              {waitingQueueJobs.map((job) => (
+                <JobCard
+                  key={job.id}
+                  job={job}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onViewDetails={setSelectedJob}
+                  onDelete={deleteJob}
+                  onToggleWarningMute={toggleJobWarningMute}
+                />
+              ))}
             </div>
-
-            {/* NOTE: queueJobs is still computed above and left intact for safety */}
-            {queueJobs.length === 0 ? null : null}
           </div>
         </div>
       </main>

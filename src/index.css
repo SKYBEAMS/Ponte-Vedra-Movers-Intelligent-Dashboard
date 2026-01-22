@@ -31,3 +31,27 @@ body {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
+
+/* Queue UI helpers (Tailwind v4 + @apply supported) */
+@layer components {
+  .q-section { @apply my-2; }
+
+  .q-header {
+    @apply flex items-center gap-2 px-3 py-2 rounded-xl
+           bg-white/5 border border-white/10;
+  }
+
+  .q-title { @apply font-bold uppercase tracking-widest text-xs; }
+
+  .q-icon {
+    @apply inline-flex items-center justify-center w-4 h-4 text-xs;
+  }
+
+  .q-list { @apply mt-1 pl-2; }
+
+  .q-empty { @apply px-3 py-2 text-xs text-white/60; }
+
+  .q-waiting { @apply opacity-75; }
+
+  .q-divider { @apply h-px my-2 bg-white/10; }
+}
