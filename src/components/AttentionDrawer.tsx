@@ -2,40 +2,89 @@ import React, { useEffect, useState } from "react";
 import {
   AttentionItem,
   AttentionPriority,
+  AttentionStatus,
   addAttentionItem,
   resolveAttentionItem,
   snoozeAttentionItem,
   subscribeAttentionListByStatus,
   unsnoozeAttentionItem,
+  reopenAttentionItem,
 } from "../firestore/attentionItems";
 
 type AttentionDrawerProps = {
   open: boolean;
   priority: AttentionPriority;
   onClose: () => void;
+  onOptimisticAdd?: (priority: AttentionPriority) => void;
+  onOptimisticRemove?: (priority: AttentionPriority) => void;
 };
 
-export default function AttentionDrawer({ open, priority, onClose }: AttentionDrawerProps) {
+export default function AttentionDrawer({ open, priority, onClose, onOptimisticAdd, onOptimisticRemove }: AttentionDrawerProps) {
   const [items, setItems] = useState<AttentionItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [newMessage, setNewMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [snoozeOpenId, setSnoozeOpenId] = useState<string | null>(null);
-  const [view, setView] = useState<"UNRESOLVED" | "SNOOZED">("UNRESOLVED");
+  const [viewStatus, setViewStatus] = useState<AttentionStatus>("UNRESOLVED");
   const [resolveConfirmId, setResolveConfirmId] = useState<string | null>(null);
+  const [resolvedFilter, setResolvedFilter] = useState<"TODAY" | "ALL">("TODAY");
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Helper: start of today (America/New_York)
+  const getStartOfTodayNY = () => {
+    const now = new Date();
+    const nyTime = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+    nyTime.setHours(0, 0, 0, 0);
+    return nyTime;
+  };
 
   useEffect(() => {
     if (!open) return;
 
+    setError(null);
     setLoading(true);
-    const unsub = subscribeAttentionListByStatus(priority, view, (list) => {
-      setItems(list);
-      setLoading(false);
-    });
+    setItems([]);
 
-    return () => unsub();
-  }, [open, priority, view]);
+    let unsub: (() => void) | null = null;
+
+    try {
+      unsub = subscribeAttentionListByStatus(
+        priority,
+        viewStatus,
+        (list) => {
+          setItems(list);
+          setLoading(false);
+        },
+        (err) => {
+          console.error("Attention subscription error:", err);
+          setError(err.message || "Failed to load attention items");
+          setLoading(false);
+          setItems([]);
+        }
+      );
+    } catch (err) {
+      console.error("Failed to subscribe to attention items:", err);
+      setError("Failed to subscribe to attention items");
+      setLoading(false);
+    }
+
+    // Safety timeout: log if loading is still true after 3 seconds
+    const timeoutId = setTimeout(() => {
+      setLoading((prev) => {
+        if (prev) {
+          console.error("Attention list still loading", { priority, viewStatus });
+        }
+        return prev;
+      });
+    }, 3000);
+
+    return () => {
+      if (unsub) unsub();
+      clearTimeout(timeoutId);
+    };
+  }, [open, priority, viewStatus, refreshKey]);
 
   if (!open) return null;
 
@@ -71,14 +120,25 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
     if (!newTitle) return;
 
     setSaving(true);
-    await addAttentionItem({
-      title: newTitle,
-      message: newMessage,
-      priority,
-    });
-    setNewTitle("");
-    setNewMessage("");
-    setSaving(false);
+    try {
+      const newItem = await addAttentionItem({
+        title: newTitle,
+        message: newMessage,
+        priority,
+        status: "UNRESOLVED",
+        source: "MANUAL",
+        entityType: "SYSTEM",
+      });
+      // Optimistic update: add item to local state immediately
+      if (newItem) {
+        setItems((prev) => [newItem, ...prev]);
+        onOptimisticAdd?.(newItem.priority);
+      }
+      setNewTitle("");
+      setNewMessage("");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSnooze = async (id: string) => {
@@ -86,7 +146,22 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
     await snoozeAttentionItem(id);
   };
 
-  const displayedItems = items;
+  const handleRetry = () => {
+    setRefreshKey((prev) => prev + 1);
+  };
+
+  // Filter items based on resolvedFilter if viewing RESOLVED
+  const displayedItems =
+    viewStatus === "RESOLVED" && resolvedFilter === "TODAY"
+      ? items.filter((it) => {
+          if (!it.resolvedAt) return false;
+          const resolvedTime =
+            typeof it.resolvedAt === "object" && it.resolvedAt.toDate
+              ? it.resolvedAt.toDate()
+              : new Date(it.resolvedAt);
+          return resolvedTime >= getStartOfTodayNY();
+        })
+      : items;
 
   return (
     <div className="fixed inset-0 z-50">
@@ -112,10 +187,14 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
         <div className="mt-3 flex gap-2">
           <button
             type="button"
-            onClick={() => setView("UNRESOLVED")}
+            onClick={() => {
+              setViewStatus("UNRESOLVED");
+              setLoading(true);
+              setItems([]);
+            }}
             className={[
               "px-2 py-1 rounded-lg border text-[10px] font-black tracking-widest transition-all",
-              view === "UNRESOLVED"
+              viewStatus === "UNRESOLVED"
                 ? "border-white/20 bg-white/10 text-white"
                 : "border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10",
             ].join(" ")}
@@ -125,24 +204,88 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
 
           <button
             type="button"
-            onClick={() => setView("SNOOZED")}
+            onClick={() => {
+              setViewStatus("SNOOZED");
+              setLoading(true);
+              setItems([]);
+            }}
             className={[
               "px-2 py-1 rounded-lg border text-[10px] font-black tracking-widest transition-all",
-              view === "SNOOZED"
+              viewStatus === "SNOOZED"
                 ? "border-white/20 bg-white/10 text-white"
                 : "border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10",
             ].join(" ")}
           >
             SNOOZED
           </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setViewStatus("RESOLVED");
+              setLoading(true);
+              setItems([]);
+            }}
+            className={[
+              "px-2 py-1 rounded-lg border text-[10px] font-black tracking-widest transition-all",
+              viewStatus === "RESOLVED"
+                ? "border-white/20 bg-white/10 text-white"
+                : "border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10",
+            ].join(" ")}
+          >
+            RESOLVED
+          </button>
         </div>
 
+        {/* Resolved filter toggle */}
+        {viewStatus === "RESOLVED" && (
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setResolvedFilter("TODAY")}
+              className={[
+                "px-2 py-1 rounded-lg border text-[10px] font-black tracking-widest transition-all",
+                resolvedFilter === "TODAY"
+                  ? "border-white/20 bg-white/10 text-white"
+                  : "border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10",
+              ].join(" ")}
+            >
+              TODAY
+            </button>
+            <button
+              type="button"
+              onClick={() => setResolvedFilter("ALL")}
+              className={[
+                "px-2 py-1 rounded-lg border text-[10px] font-black tracking-widest transition-all",
+                resolvedFilter === "ALL"
+                  ? "border-white/20 bg-white/10 text-white"
+                  : "border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10",
+              ].join(" ")}
+            >
+              ALL
+            </button>
+          </div>
+        )}
+
         <div className="mt-4 flex-1 overflow-auto space-y-2">
+          {error && (
+            <div className="flex items-center justify-between text-red-400/80 text-[11px] bg-red-500/10 border border-red-400/20 rounded-lg p-2">
+              <span>⚠️ Firestore query failed (index). Check console.</span>
+              <button
+                type="button"
+                onClick={handleRetry}
+                className="ml-2 px-2 py-1 rounded bg-red-500/20 hover:bg-red-500/40 text-red-300 font-bold text-[10px] whitespace-nowrap"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
           {loading && (
             <div className="text-white/60 text-[11px]">Loading…</div>
           )}
 
-          {!loading && displayedItems.length === 0 && (
+          {!loading && !error && displayedItems.length === 0 && (
             <div className="text-white/60 text-[11px]">
               No unresolved items right now.
             </div>
@@ -196,6 +339,10 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                         className="w-full px-2 py-2 rounded-lg border border-white/10 bg-white/5 text-[10px] font-black tracking-widest text-white/70 hover:text-white hover:bg-white/10"
                         onClick={async () => {
                           setResolveConfirmId(null);
+                          setItems((prev) => prev.filter((x) => x.id !== it.id));
+                          if (viewStatus === "UNRESOLVED") {
+                            onOptimisticRemove?.(it.priority);
+                          }
                           await resolveAttentionItem(it.id!);
                         }}
                       >
@@ -208,6 +355,10 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                           className="px-2 py-2 rounded-lg border border-white/10 bg-white/5 text-[9px] font-black tracking-widest text-white/70 hover:text-white hover:bg-white/10"
                           onClick={async () => {
                             setResolveConfirmId(null);
+                            setItems((prev) => prev.filter((x) => x.id !== it.id));
+                            if (viewStatus === "UNRESOLVED") {
+                              onOptimisticRemove?.(it.priority);
+                            }
                             await snoozeAttentionItem(it.id!, addHours(new Date(), 1));
                           }}
                         >
@@ -219,6 +370,10 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                           className="px-2 py-2 rounded-lg border border-white/10 bg-white/5 text-[9px] font-black tracking-widest text-white/70 hover:text-white hover:bg-white/10"
                           onClick={async () => {
                             setResolveConfirmId(null);
+                            setItems((prev) => prev.filter((x) => x.id !== it.id));
+                            if (viewStatus === "UNRESOLVED") {
+                              onOptimisticRemove?.(it.priority);
+                            }
                             await snoozeAttentionItem(it.id!, endOfDay(new Date()));
                           }}
                         >
@@ -230,6 +385,10 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                           className="px-2 py-2 rounded-lg border border-white/10 bg-white/5 text-[9px] font-black tracking-widest text-white/70 hover:text-white hover:bg-white/10"
                           onClick={async () => {
                             setResolveConfirmId(null);
+                            setItems((prev) => prev.filter((x) => x.id !== it.id));
+                            if (viewStatus === "UNRESOLVED") {
+                              onOptimisticRemove?.(it.priority);
+                            }
                             await snoozeAttentionItem(it.id!, tomorrowMorning(new Date()));
                           }}
                         >
@@ -248,13 +407,33 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                   </div>
                 )}
 
-                {view === "SNOOZED" ? (
+                {viewStatus === "SNOOZED" ? (
                   <button
                     className="px-2 py-1 rounded-lg border border-white/10 bg-white/5 text-[10px] font-bold tracking-widest text-white/70 hover:text-white hover:bg-white/10 transition-all"
                     type="button"
-                    onClick={() => it.id && unsnoozeAttentionItem(it.id)}
+                    onClick={async () => {
+                      if (it.id) {
+                        setItems((prev) => prev.filter((x) => x.id !== it.id));
+                        onOptimisticAdd?.(it.priority);
+                        await unsnoozeAttentionItem(it.id);
+                      }
+                    }}
                   >
                     UNSNOOZE
+                  </button>
+                ) : viewStatus === "RESOLVED" ? (
+                  <button
+                    className="px-2 py-1 rounded-lg border border-white/10 bg-white/5 text-[10px] font-bold tracking-widest text-white/70 hover:text-white hover:bg-white/10 transition-all"
+                    type="button"
+                    onClick={async () => {
+                      if (it.id) {
+                        setItems((prev) => prev.filter((x) => x.id !== it.id));
+                        onOptimisticAdd?.(it.priority);
+                        await reopenAttentionItem(it.id);
+                      }
+                    }}
+                  >
+                    REOPEN
                   </button>
                 ) : (
                   <div className="relative">
@@ -273,6 +452,10 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                           type="button"
                           onClick={async () => {
                             setSnoozeOpenId(null);
+                            setItems((prev) => prev.filter((x) => x.id !== it.id));
+                            if (viewStatus === "UNRESOLVED") {
+                              onOptimisticRemove?.(it.priority);
+                            }
                             await snoozeAttentionItem(it.id!, addHours(new Date(), 1));
                           }}
                         >
@@ -283,6 +466,10 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                           type="button"
                           onClick={async () => {
                             setSnoozeOpenId(null);
+                            setItems((prev) => prev.filter((x) => x.id !== it.id));
+                            if (viewStatus === "UNRESOLVED") {
+                              onOptimisticRemove?.(it.priority);
+                            }
                             await snoozeAttentionItem(it.id!, endOfDay(new Date()));
                           }}
                         >
@@ -293,6 +480,10 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
                           type="button"
                           onClick={async () => {
                             setSnoozeOpenId(null);
+                            setItems((prev) => prev.filter((x) => x.id !== it.id));
+                            if (viewStatus === "UNRESOLVED") {
+                              onOptimisticRemove?.(it.priority);
+                            }
                             await snoozeAttentionItem(it.id!, tomorrowMorning(new Date()));
                           }}
                         >
@@ -325,23 +516,7 @@ export default function AttentionDrawer({ open, priority, onClose }: AttentionDr
 
           <button
             disabled={!newTitle || saving}
-            onClick={async () => {
-              try {
-                setSaving(true);
-                await addAttentionItem({
-                  priority,
-                  status: "UNRESOLVED",
-                  source: "MANUAL",
-                  title: newTitle,
-                  message: newMessage,
-                  entityType: "SYSTEM",
-                });
-                setNewTitle("");
-                setNewMessage("");
-              } finally {
-                setSaving(false);
-              }
-            }}
+            onClick={handleSave}
             className="w-full rounded-lg border border-white/10 bg-white/5 py-2 text-[10px] font-black tracking-widest text-white/70 hover:text-white hover:bg-white/10 disabled:opacity-40 transition-all"
             type="button"
           >

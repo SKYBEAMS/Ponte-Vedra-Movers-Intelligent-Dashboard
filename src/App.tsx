@@ -161,9 +161,6 @@ function coerceScheduledArrivalIso(data: any): { scheduledArrivalIso: string; ti
 export default function App() {
   const [trucks, setTrucks] = useState<Truck[]>(INITIAL_TRUCKS);
 
-  // ✅ Employees state
-  const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
-
   /** ✅ initial jobs hydrated once + warnings stamped once */
   const [allJobs, setAllJobs] = useState<Job[]>([]);
 
@@ -196,6 +193,24 @@ export default function App() {
     HEADS_UP: 0,
   });
 
+  // ✅ NEW: Attention error state
+  const [attentionError, setAttentionError] = useState<string | null>(null);
+
+  // ✅ NEW: Optimistic count helpers
+  const optimisticBump = (priority: "CRITICAL" | "HEADS_UP") => {
+    setAttentionCounts((prev) => ({
+      ...prev,
+      [priority]: prev[priority] + 1,
+    }));
+  };
+
+  const optimisticDrop = (priority: "CRITICAL" | "HEADS_UP") => {
+    setAttentionCounts((prev) => ({
+      ...prev,
+      [priority]: Math.max(0, prev[priority] - 1),
+    }));
+  };
+
   // ✅ NEW: Open/close helpers
   const openEmployeeModal = (employee: Employee, truckId: string | null) => {
     setEmployeeModal({ open: true, employee, truckId });
@@ -220,6 +235,7 @@ export default function App() {
 
   const { employees: fsEmployees, loading: employeesLoading, error: employeesError } = useEmployees();
 
+  // ✅ Single source of truth for employees
   const employeesSource = fsEmployees.length ? fsEmployees : INITIAL_EMPLOYEES;
 
   useEffect(() => {
@@ -666,7 +682,13 @@ export default function App() {
   };
 
   useEffect(() => {
-    const unsub = subscribeAttentionCounts(setAttentionCounts);
+    const unsub = subscribeAttentionCounts(
+      setAttentionCounts,
+      (err) => {
+        console.error("Attention counts subscription error:", err);
+        setAttentionError("Sync failed");
+      }
+    );
     return () => unsub();
   }, []);
 
@@ -769,21 +791,26 @@ export default function App() {
           </div>
 
           {/* ✅ NEW: Action Panel */}
-          <div className="mt-3">
-  <ActionPanel
-    makeStatus="ACTIVE"
-    onEtaPing={handleEtaPing}
-    onSupplies={handleSupplies}
-    onBroadcast={handleBroadcast}
-    onNewJob={handleNewJob}
-    onNeedsAttention={handleNeedsAttention}
-    onHeadsUp={handleHeadsUp}
-    onQuickNotes={handleQuickNotes}
-    needsAttentionCount={attentionCounts.CRITICAL}
-    headsUpCount={attentionCounts.HEADS_UP}
-/>
-</div>   {/* ✅ THIS WAS MISSING */}
-
+          <div className="mt-3 relative">
+            <ActionPanel
+              makeStatus="ACTIVE"
+              onEtaPing={handleEtaPing}
+              onSupplies={handleSupplies}
+              onBroadcast={handleBroadcast}
+              onNewJob={handleNewJob}
+              onNeedsAttention={handleNeedsAttention}
+              onHeadsUp={handleHeadsUp}
+              onQuickNotes={handleQuickNotes}
+              needsAttentionCount={attentionCounts.CRITICAL}
+              headsUpCount={attentionCounts.HEADS_UP}
+            />
+            {attentionError && (
+              <div className="absolute top-1 right-3 flex items-center gap-1">
+                <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]"></div>
+                <span className="text-[9px] text-red-400 font-bold">SYNC</span>
+              </div>
+            )}
+          </div>
 
           <div className="glass p-4 rounded-2xl border border-sky-500/20 flex items-center justify-between shadow-2xl">
             <div className="flex items-center space-x-6">
@@ -998,6 +1025,8 @@ export default function App() {
         open={attentionOpen}
         priority={attentionPriority}
         onClose={() => setAttentionOpen(false)}
+        onOptimisticAdd={optimisticBump}
+        onOptimisticRemove={optimisticDrop}
       />
     </div>
   );
