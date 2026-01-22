@@ -9,6 +9,8 @@ type ActionPanelProps = {
   onNeedsAttention: () => void;
   onHeadsUp: () => void;
   onQuickNotes: () => void;
+  needsAttentionCount?: number;
+  headsUpCount?: number;
 };
 
 export default function ActionPanel({
@@ -20,6 +22,8 @@ export default function ActionPanel({
   onNeedsAttention,
   onHeadsUp,
   onQuickNotes,
+  needsAttentionCount = 0,
+  headsUpCount = 0,
 }: ActionPanelProps) {
   const pill =
     makeStatus === "ACTIVE"
@@ -28,6 +32,9 @@ export default function ActionPanel({
 
   const btn =
     "px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-[10px] font-bold uppercase tracking-widest text-white/80 hover:text-white hover:bg-white/10 transition-all";
+
+  const badge =
+    "ml-2 inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[9px] font-black bg-white/15 text-white";
 
   return (
     <div className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-white/10 bg-white/5">
@@ -47,9 +54,13 @@ export default function ActionPanel({
         </button>
         <button className={btn} onClick={onNeedsAttention} type="button">
           NEEDS ATTENTION
+          {needsAttentionCount > 0 && (
+            <span className={badge}>{needsAttentionCount}</span>
+          )}
         </button>
         <button className={btn} onClick={onHeadsUp} type="button">
           HEADS UP
+          {headsUpCount > 0 && <span className={badge}>{headsUpCount}</span>}
         </button>
         <button className={btn} onClick={onQuickNotes} type="button">
           QUICK NOTES

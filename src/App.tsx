@@ -37,6 +37,7 @@ import { updateTruck } from "./firestore/trucks";
 import { addEmployeeNote, listenEmployeeNotes } from "./firestore/employeeNotes";
 import { addDispatchEvent } from "./firestore/dispatchEvents";
 import { addQuickNote } from "./firestore/quickNotes";
+import { subscribeAttentionCounts } from "./firestore/attentionItems";
 
 // ✅ history snapshot type
 type AppStateSnapshot = {
@@ -188,6 +189,12 @@ export default function App() {
   // ✅ NEW: Attention drawer state
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [attentionPriority, setAttentionPriority] = useState<"CRITICAL" | "HEADS_UP">("CRITICAL");
+
+  // ✅ NEW: Attention counts state
+  const [attentionCounts, setAttentionCounts] = useState<{ CRITICAL: number; HEADS_UP: number }>({
+    CRITICAL: 0,
+    HEADS_UP: 0,
+  });
 
   // ✅ NEW: Open/close helpers
   const openEmployeeModal = (employee: Employee, truckId: string | null) => {
@@ -643,13 +650,11 @@ export default function App() {
   };
 
   const handleNeedsAttention = () => {
-    console.log("OPEN CRITICAL");
     setAttentionPriority("CRITICAL");
     setAttentionOpen(true);
   };
 
   const handleHeadsUp = () => {
-    console.log("OPEN HEADS_UP");
     setAttentionPriority("HEADS_UP");
     setAttentionOpen(true);
   };
@@ -659,6 +664,11 @@ export default function App() {
   const saveQuickNote = async (text: string) => {
     await addQuickNote(text);
   };
+
+  useEffect(() => {
+    const unsub = subscribeAttentionCounts(setAttentionCounts);
+    return () => unsub();
+  }, []);
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-white tron-grid overflow-hidden relative">
@@ -769,7 +779,9 @@ export default function App() {
     onNeedsAttention={handleNeedsAttention}
     onHeadsUp={handleHeadsUp}
     onQuickNotes={handleQuickNotes}
-  />
+    needsAttentionCount={attentionCounts.CRITICAL}
+    headsUpCount={attentionCounts.HEADS_UP}
+/>
 </div>   {/* ✅ THIS WAS MISSING */}
 
 

@@ -10,7 +10,7 @@ import {
   updateDoc,
   where,
 } from "firebase/firestore";
-import { db } from "./firebase"; // adjust if your firebase export path differs
+import { db } from "../firebase"; // adjust if your firebase export path differs
 
 export type AttentionPriority = "CRITICAL" | "HEADS_UP";
 export type AttentionStatus = "UNRESOLVED" | "RESOLVED" | "SNOOZED";
