@@ -106,10 +106,11 @@ export default function JobCard({
   // ✅ normalize warnings (this returns Job w/ warning fields set)
   const j = evaluateJobWarnings(job);
 
-  // ✅ read the detailed result so we can do “icons always, yellow only at 3+”
+  // ✅ read the detailed result so we can do "icons always, yellow only at 3+"
   const result = useMemo(() => evaluateJobWarningsResult(j), [j]);
 
-  const isMuted = !!j.warningMuted;
+  // ✅ Default to false (mute OFF on load)
+  const isMuted = j.warningMuted ?? false;
 
   // HARD = red (date missing/invalid/past per your jobwarnings.ts)
   const isHard = !isMuted && (j.warningLevel === "hard" || result.level === "hard");
@@ -117,6 +118,14 @@ export default function JobCard({
   // SOFT (yellow) only if 3+ soft flags AND not muted
   const softCount = result.softFlags?.length ?? 0;
   const isSoft = !isMuted && !isHard && softCount >= 3;
+
+  // ✅ Only show mute button when there's an actual warning to mute
+  const hasWarnOrCritical =
+    j.warningLevel === "hard" ||
+    j.warningLevel === "soft" ||
+    (result.level && result.level !== "none");
+
+  const showMuteBtn = hasWarnOrCritical;
 
   // ✅ we still show chips for whatever soft flags exist (even if <3)
   const chips = (result.softFlags || []).slice(0, 4); // keep tight; we can expand later
@@ -159,8 +168,6 @@ export default function JobCard({
 
   const displayName = (j.customerName || "").trim() ? j.customerName : "—";
 
-  const showMuteBtn = (j.warningLevel && j.warningLevel !== "none") || result.level !== "none";
-
   return (
     <div
       draggable
@@ -182,15 +189,23 @@ export default function JobCard({
           {/* ✅ Mute/Unmute warnings button (still allowed) */}
           {showMuteBtn && onToggleWarningMute && (
             <button
+              type="button"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 onToggleWarningMute(j.id);
               }}
-              className="text-[10px] px-2 py-1 rounded-lg border border-white/10 bg-white/5 text-white/60 hover:text-white hover:bg-white/10 transition-all"
               title={j.warningMuted ? "Unmute warning highlight" : "Mute warning highlight"}
+              className={[
+                "absolute -top-2 right-2 z-30",
+                "px-2 py-[2px] rounded-full text-[9px] font-bold uppercase tracking-widest",
+                "border shadow-sm",
+                j.warningMuted
+                  ? "bg-slate-900 text-white border-slate-700"
+                  : "bg-yellow-500/20 text-yellow-200 border-yellow-400/40 hover:bg-yellow-500/30",
+              ].join(" ")}
             >
-              {j.warningMuted ? "Unmute" : "Mute"}
+              {j.warningMuted ? "Muted" : "Mute"}
             </button>
           )}
 

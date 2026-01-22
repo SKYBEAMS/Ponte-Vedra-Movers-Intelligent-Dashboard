@@ -20,6 +20,8 @@ import JobCard from "./components/JobCard";
 import TruckCard from "./components/TruckCard";
 import JobDetailsModal from "./components/JobDetailsModal";
 import EmployeeDetailsModal from "./components/EmployeeDetailsModal";
+import ActionPanel from "./components/ActionPanel";
+import QuickNotesModal from "./components/QuickNotesModal";
 
 import { pushHistory, popHistory } from "./utils/history";
 import { evaluateJobWarnings, evaluateJobWarningsResult } from "./utils/jobwarnings";
@@ -33,6 +35,7 @@ import { pickLeadAndContact } from "./utils/pickLeadAndContact";
 import { updateTruck } from "./firestore/trucks";
 import { addEmployeeNote, listenEmployeeNotes } from "./firestore/employeeNotes";
 import { addDispatchEvent } from "./firestore/dispatchEvents";
+import { addQuickNote } from "./firestore/quickNotes";
 
 // ✅ history snapshot type
 type AppStateSnapshot = {
@@ -177,6 +180,9 @@ export default function App() {
 
   // ✅ NEW: Employee notes state
   const [employeeNotes, setEmployeeNotes] = useState<EmployeeNote[]>([]);
+
+  // ✅ NEW: Quick Notes modal state
+  const [quickNotesOpen, setQuickNotesOpen] = useState(false);
 
   // ✅ NEW: Open/close helpers
   const openEmployeeModal = (employee: Employee, truckId: string | null) => {
@@ -408,11 +414,20 @@ export default function App() {
   const toggleTruckWarningMute = useCallback(
     (truckId: string) => {
       saveHistory();
+      
+      // ✅ Extract current state with proper default
+      const currentTruck = trucks.find(t => t.id === truckId);
+      const currentMuted = currentTruck?.warningMuted ?? false;
+      const newMuted = !currentMuted;
+      
       setTrucks((prev) =>
-        prev.map((t) => (t.id === truckId ? { ...t, warningMuted: !t.warningMuted } : t))
+        prev.map((t) => (t.id === truckId ? { ...t, warningMuted: newMuted } : t))
       );
+      
+      // ✅ Pass the clean boolean value to Firestore
+      updateTruck(truckId, { warningMuted: newMuted }).catch(console.error);
     },
-    [saveHistory]
+    [saveHistory, trucks]
   );
 
   const handleDropOnTruck = useCallback((e: React.DragEvent, targetTruckId: string) => {
@@ -605,6 +620,33 @@ export default function App() {
     }
   };
 
+  // ✅ NEW: Action panel handlers
+  const handleEtaPing = () => {
+    console.log("ETA ping triggered");
+  };
+
+  const handleSupplies = () => {
+    console.log("Supplies check triggered");
+  };
+
+  const handleBroadcast = () => {
+    console.log("Broadcast note triggered");
+  };
+
+  const handleNewJob = () => {
+    console.log("New job triggered");
+  };
+
+  const handleNeedsAttention = () => {
+    console.log("Needs attention / morning briefing");
+  };
+
+  const handleQuickNotes = () => setQuickNotesOpen(true);
+
+  const saveQuickNote = async (text: string) => {
+    await addQuickNote(text);
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-white tron-grid overflow-hidden relative">
       <TopNav onUndo={handleUndo} canUndo={history.length > 0} onRefresh={handleRefresh} />
@@ -703,6 +745,19 @@ export default function App() {
             })}
           </div>
 
+          {/* ✅ NEW: Action Panel */}
+          <div className="mt-3">
+            <ActionPanel
+              makeStatus="ACTIVE"
+              onEtaPing={handleEtaPing}
+              onSupplies={handleSupplies}
+              onBroadcast={handleBroadcast}
+              onNewJob={handleNewJob}
+              onNeedsAttention={handleNeedsAttention}
+              onQuickNotes={handleQuickNotes}
+            />
+          </div>
+
           <div className="glass p-4 rounded-2xl border border-sky-500/20 flex items-center justify-between shadow-2xl">
             <div className="flex items-center space-x-6">
               <div className="flex items-center space-x-2">
@@ -732,9 +787,14 @@ export default function App() {
         {/* Right Column: Queue */}
         <div className="w-[320px] flex flex-col">
           <div className="flex items-center justify-between mb-4 px-2">
-            <h2 className="font-tech text-xs font-bold text-sky-400 uppercase tracking-[0.2em] flex items-center">
-              <ClipboardList size={16} className="mr-2" /> Job Queue
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="font-tech text-xs font-bold text-sky-400 uppercase tracking-[0.2em] flex items-center">
+                <ClipboardList size={16} className="mr-2" /> Job Queue
+              </h2>
+              <span className="text-[10px] bg-sky-500/10 text-sky-300 px-2 py-0.5 rounded border border-sky-500/20">
+                {/* count will be added dynamically */}
+              </span>
+            </div>
             <button
               onClick={addJob}
               className="p-1.5 bg-sky-500/10 border border-sky-500/30 rounded text-sky-400 hover:bg-sky-500 hover:text-white transition-all"
@@ -769,7 +829,7 @@ export default function App() {
 
             {/* ✅ Needs Review */}
             <div className="mb-3">
-              <div className="flex items-center justify-between px-2 mb-2">
+              <div className="flex items-center gap-2 px-2 mb-2">
                 <span className="text-[10px] font-bold text-amber-300/90 tracking-widest uppercase flex items-center gap-2">
                   <AlertTriangle size={14} className="text-amber-300/90" />
                   Needs Review
@@ -798,7 +858,7 @@ export default function App() {
 
             {/* ✅ Today Queue */}
             <div className="mb-3">
-              <div className="flex items-center justify-between px-2 mb-2">
+              <div className="flex items-center gap-2 px-2 mb-2">
                 <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">
                   Today Queue
                 </span>
@@ -831,7 +891,7 @@ export default function App() {
 
             {/* ✅ Waiting Queue */}
             <div className="mt-2">
-              <div className="flex items-center justify-between px-2 mb-2">
+              <div className="flex items-center gap-2 px-2 mb-2">
                 <span className="text-[10px] font-bold text-white/60 tracking-widest uppercase">
                   Waiting Queue
                 </span>
@@ -897,6 +957,13 @@ export default function App() {
         // ✅ NEW: pass notes and handler
         notes={employeeNotes}
         onAddNote={handleAddEmployeeNote}
+      />
+
+      {/* ✅ NEW: Quick Notes Modal */}
+      <QuickNotesModal
+        open={quickNotesOpen}
+        onClose={() => setQuickNotesOpen(false)}
+        onSave={saveQuickNote}
       />
     </div>
   );

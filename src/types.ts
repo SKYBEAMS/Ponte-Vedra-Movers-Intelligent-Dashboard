@@ -55,6 +55,7 @@ export interface Employee {
 
 export type Job = {
   id: string;
+  jobId?: string;
 
   // Core identity
   customerName: string;

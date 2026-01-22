@@ -93,14 +93,19 @@ export default function TruckCard({
 
   const fuelBand = warning.fuelBand; // "ok" | "low" | "critical"
 
+  // ✅ Show mute button only when there's an active warning to mute
+  const showMuteBtn = active && warning.warningLevel !== "none";
+
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`glass border transition-all duration-300 rounded-2xl flex flex-col min-h-[220px] overflow-hidden ${
+      className={`relative group glass border transition-all duration-300 rounded-2xl flex flex-col min-h-[220px] overflow-hidden ${
         isOver ? overBorder : baseBorder
-      } ${showWarning && !isOver ? "shadow-[0_0_18px_rgba(245,158,11,0.08)]" : ""} ${baseDim}`}
+      } ${showWarning && !isOver ? "shadow-[0_0_18px_rgba(245,158,11,0.08)]" : ""} ${baseDim} ${
+        truckHard ? "hover:border-red-400/70 hover:shadow-[0_0_0_1px_rgba(239,68,68,0.25),0_0_20px_rgba(239,68,68,0.18)]" : ""
+      }`}
       title={showWarning && warning.warningNote ? warning.warningNote : undefined}
     >
       <div className="bg-white/5 p-3 flex items-center justify-between border-b border-white/5">
@@ -135,23 +140,7 @@ export default function TruckCard({
         </div>
 
         <div className="flex items-center space-x-3">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleTruckMute(truck.id);
-            }}
-            className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded border transition ${
-              truck.warningMuted
-                ? "border-sky-400/40 bg-sky-500/10 text-sky-300"
-                : "border-white/10 bg-white/5 text-white/50 hover:text-white"
-            }`}
-            title="Mute/unmute truck warnings"
-          >
-            {truck.warningMuted ? "Muted" : "Mute"}
-          </button>
-
-          <div className="flex flex-col items-end">
+          <div className="ml-2 flex flex-col items-end">
             <span className="text-[9px] text-white/40 uppercase font-bold">
               Fuel
             </span>
@@ -179,6 +168,28 @@ export default function TruckCard({
           >
             {truck.ready ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
           </div>
+
+          {showMuteBtn && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onToggleTruckMute(truck.id);
+              }}
+              title="Mute/unmute truck warnings"
+              className={[
+                "z-[60] pointer-events-auto",
+                "text-[9px] px-2 py-[2px] rounded-md border",
+                "transition-all duration-150",
+                truck.warningMuted
+                  ? "bg-white/5 text-white/70 border-white/10"
+                  : "bg-amber-500/20 text-amber-200 border-amber-400/40 hover:bg-amber-500/30 hover:border-amber-300/70 hover:text-amber-100 hover:shadow-[0_0_0_1px_rgba(251,191,36,0.25),0_0_18px_rgba(251,191,36,0.18)]",
+              ].join(" ")}
+            >
+              {truck.warningMuted ? "MUTED" : "MUTE"}
+            </button>
+          )}
         </div>
       </div>
 
