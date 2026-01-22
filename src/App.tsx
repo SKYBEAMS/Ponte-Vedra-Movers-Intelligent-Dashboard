@@ -22,6 +22,7 @@ import JobDetailsModal from "./components/JobDetailsModal";
 import EmployeeDetailsModal from "./components/EmployeeDetailsModal";
 import ActionPanel from "./components/ActionPanel";
 import QuickNotesModal from "./components/QuickNotesModal";
+import AttentionDrawer from "./components/AttentionDrawer";
 
 import { pushHistory, popHistory } from "./utils/history";
 import { evaluateJobWarnings, evaluateJobWarningsResult } from "./utils/jobwarnings";
@@ -183,6 +184,10 @@ export default function App() {
 
   // ✅ NEW: Quick Notes modal state
   const [quickNotesOpen, setQuickNotesOpen] = useState(false);
+
+  // ✅ NEW: Attention drawer state
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [attentionPriority, setAttentionPriority] = useState<"CRITICAL" | "HEADS_UP">("CRITICAL");
 
   // ✅ NEW: Open/close helpers
   const openEmployeeModal = (employee: Employee, truckId: string | null) => {
@@ -638,7 +643,15 @@ export default function App() {
   };
 
   const handleNeedsAttention = () => {
-    console.log("Needs attention / morning briefing");
+    console.log("OPEN CRITICAL");
+    setAttentionPriority("CRITICAL");
+    setAttentionOpen(true);
+  };
+
+  const handleHeadsUp = () => {
+    console.log("OPEN HEADS_UP");
+    setAttentionPriority("HEADS_UP");
+    setAttentionOpen(true);
   };
 
   const handleQuickNotes = () => setQuickNotesOpen(true);
@@ -747,16 +760,18 @@ export default function App() {
 
           {/* ✅ NEW: Action Panel */}
           <div className="mt-3">
-            <ActionPanel
-              makeStatus="ACTIVE"
-              onEtaPing={handleEtaPing}
-              onSupplies={handleSupplies}
-              onBroadcast={handleBroadcast}
-              onNewJob={handleNewJob}
-              onNeedsAttention={handleNeedsAttention}
-              onQuickNotes={handleQuickNotes}
-            />
-          </div>
+  <ActionPanel
+    makeStatus="ACTIVE"
+    onEtaPing={handleEtaPing}
+    onSupplies={handleSupplies}
+    onBroadcast={handleBroadcast}
+    onNewJob={handleNewJob}
+    onNeedsAttention={handleNeedsAttention}
+    onHeadsUp={handleHeadsUp}
+    onQuickNotes={handleQuickNotes}
+  />
+</div>   {/* ✅ THIS WAS MISSING */}
+
 
           <div className="glass p-4 rounded-2xl border border-sky-500/20 flex items-center justify-between shadow-2xl">
             <div className="flex items-center space-x-6">
@@ -964,6 +979,13 @@ export default function App() {
         open={quickNotesOpen}
         onClose={() => setQuickNotesOpen(false)}
         onSave={saveQuickNote}
+      />
+
+      {/* ✅ NEW: Attention Drawer */}
+      <AttentionDrawer
+        open={attentionOpen}
+        priority={attentionPriority}
+        onClose={() => setAttentionOpen(false)}
       />
     </div>
   );

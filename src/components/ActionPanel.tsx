@@ -7,6 +7,7 @@ type ActionPanelProps = {
   onBroadcast: () => void;
   onNewJob: () => void;
   onNeedsAttention: () => void;
+  onHeadsUp: () => void;
   onQuickNotes: () => void;
 };
 
@@ -17,6 +18,7 @@ export default function ActionPanel({
   onBroadcast,
   onNewJob,
   onNeedsAttention,
+  onHeadsUp,
   onQuickNotes,
 }: ActionPanelProps) {
   const pill =
@@ -45,6 +47,9 @@ export default function ActionPanel({
         </button>
         <button className={btn} onClick={onNeedsAttention} type="button">
           NEEDS ATTENTION
+        </button>
+        <button className={btn} onClick={onHeadsUp} type="button">
+          HEADS UP
         </button>
         <button className={btn} onClick={onQuickNotes} type="button">
           QUICK NOTES
