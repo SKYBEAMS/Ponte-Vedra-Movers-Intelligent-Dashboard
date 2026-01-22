@@ -53,11 +53,47 @@ export async function resolveAttentionItem(id: string) {
   });
 }
 
+export async function snoozeAttentionItem(id: string, snoozeUntil: Date) {
+  const ref = doc(db, "attention_items", id);
+  return updateDoc(ref, {
+    status: "SNOOZED",
+    snoozeUntil,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function unsnoozeAttentionItem(id: string) {
+  const ref = doc(db, "attention_items", id);
+  return updateDoc(ref, {
+    status: "UNRESOLVED",
+    snoozeUntil: null,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export function subscribeAttentionList(priority: AttentionPriority, cb: (items: AttentionItem[]) => void) {
   const q = query(
     colRef,
     where("priority", "==", priority),
     where("status", "==", "UNRESOLVED"),
+    orderBy("createdAt", "desc")
+  );
+
+  return onSnapshot(q, (snap) => {
+    const items: AttentionItem[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+    cb(items);
+  });
+}
+
+export function subscribeAttentionListByStatus(
+  priority: AttentionPriority,
+  status: AttentionStatus,
+  cb: (items: AttentionItem[]) => void
+) {
+  const q = query(
+    colRef,
+    where("priority", "==", priority),
+    where("status", "==", status),
     orderBy("createdAt", "desc")
   );
 
