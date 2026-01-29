@@ -200,32 +200,35 @@ export const INITIAL_TRUCKS: Truck[] = [
   {
     id: "t1",
     name: "Truck 1",
+    truckNumber: "1",
     capacity: 6,
     fuelLevel: 5,
     ready: true,
-    crewIds: [], // ✅ fresh screen: no assignments
-    jobIds: [],  // ✅ fresh screen: no assignments
+    assignedEmployeeIds: [],
+    jobIds: [],
   },
 
   // 🟢 healthy
   {
     id: "t2",
     name: "Truck 2",
+    truckNumber: "2",
     capacity: 6,
     fuelLevel: 65,
     ready: true,
-    crewIds: [], // ✅ fresh screen
-    jobIds: [],  // ✅ fresh screen
+    assignedEmployeeIds: [],
+    jobIds: [],
   },
 
   // 🟢 Inactive (dim/neutral)
   {
     id: "t3",
     name: "Truck 3",
+    truckNumber: "3",
     capacity: 4,
     fuelLevel: 80,
     ready: true,
-    crewIds: [],
+    assignedEmployeeIds: [],
     jobIds: [],
   },
 
@@ -233,21 +236,23 @@ export const INITIAL_TRUCKS: Truck[] = [
   {
     id: "t4",
     name: "Truck 4",
+    truckNumber: "4",
     capacity: 6,
     fuelLevel: 70,
     ready: true, // ✅ fresh screen: no “not ready” red
-    crewIds: [], // ✅ fresh screen
-    jobIds: [],  // ✅ fresh screen
+    assignedEmployeeIds: [],
+    jobIds: [],
   },
 
   // 🟢 healthy
   {
     id: "t5",
     name: "Truck 5",
+    truckNumber: "5",
     capacity: 4,
     fuelLevel: 90,
     ready: true,
-    crewIds: [], // ✅ fresh screen
+    assignedEmployeeIds: [], // ✅ fresh screen
     jobIds: [],  // ✅ fresh screen
   },
 
@@ -255,10 +260,11 @@ export const INITIAL_TRUCKS: Truck[] = [
   {
     id: "t6",
     name: "Truck 6",
+    truckNumber: "6",
     capacity: 6,
     fuelLevel: 55,
     ready: true,
-    crewIds: [],
+    assignedEmployeeIds: [],
     jobIds: [],
   },
 ];

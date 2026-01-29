@@ -1,13 +1,29 @@
-import React, { useMemo } from "react";
-import { Home, Undo2, RefreshCcw } from "lucide-react";
+import React, { useMemo, useState, useEffect } from "react";
+import { Home, Undo2, RefreshCcw, RotateCcw } from "lucide-react";
 
 type TopNavProps = {
   onUndo: () => void;
   canUndo: boolean;
   onRefresh: () => void;
+  lastRefreshAt: number;
 };
 
-export default function TopNav({ onUndo, canUndo, onRefresh }: TopNavProps) {
+export default function TopNav({
+  onUndo,
+  canUndo,
+  onRefresh,
+  lastRefreshAt,
+}: TopNavProps) {
+  const [showSynced, setShowSynced] = useState(false);
+
+  useEffect(() => {
+    if (lastRefreshAt === 0) return;
+
+    setShowSynced(true);
+    const timer = setTimeout(() => setShowSynced(false), 500);
+    return () => clearTimeout(timer);
+  }, [lastRefreshAt]);
+
   const dateStr = useMemo(() => {
     return new Date().toLocaleDateString("en-US", {
       weekday: "long",
@@ -18,7 +34,7 @@ export default function TopNav({ onUndo, canUndo, onRefresh }: TopNavProps) {
   }, []);
 
   return (
-    <div className="h-16 flex items-center justify-between px-6 glass border-b border-sky-500/30 fixed top-0 left-0 right-0 z-50">
+    <div className="fixed top-0 left-0 right-0 h-16 bg-slate-900/95 backdrop-blur border-b border-sky-500/20 flex items-center justify-between px-6 z-50 shadow-lg">
       <div className="flex items-center space-x-4">
         <button className="flex items-center space-x-2 text-white/80 hover:text-sky-400 transition-colors bg-white/5 px-3 py-1.5 rounded-lg border border-white/10 hover:border-sky-500/50">
           <Home size={18} />
@@ -40,10 +56,15 @@ export default function TopNav({ onUndo, canUndo, onRefresh }: TopNavProps) {
 
         <button
           onClick={onRefresh}
-          className="p-2 text-white/80 hover:text-sky-400 transition-colors bg-white/5 rounded-lg border border-white/10 hover:border-sky-500/50"
-          title="Refresh"
+          className="relative p-2 text-sky-400 hover:bg-sky-500/10 rounded transition-all"
+          title="Sync"
         >
-          <RefreshCcw size={18} />
+          <RotateCcw size={18} />
+          {showSynced && (
+            <span className="absolute top-1 right-1 inline-block text-[8px] font-bold text-emerald-400 animate-pulse">
+              ✓
+            </span>
+          )}
         </button>
       </div>
 

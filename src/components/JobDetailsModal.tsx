@@ -16,7 +16,7 @@ import { FLAG_ICONS } from "../constants";
 import { evaluateJobWarnings } from "../utils/jobwarnings";
 
 // ✅ Firestore write-back (source of truth)
-import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../firebase";
 
 type Props = {
@@ -168,6 +168,7 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
   if (!job) return null;
 
   const [draft, setDraft] = useState<Job>(job);
+  const [saving, setSaving] = useState(false);
 
   const initialAmPm = (job.time || "").toUpperCase().includes("PM") ? "PM" : "AM";
   const [ampm, setAmpm] = useState<"AM" | "PM">(initialAmPm);
@@ -228,83 +229,75 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
   };
 
   const save = async () => {
-    const nextStatus = draft.status ?? JobStatus.READY;
-
-    // ✅ Always save a clean label for card display
-    const composedFromTo = makeFromToLabel(pickupAddress, dropoffAddress);
-
-    // ✅ scheduledArrival is source of truth:
-    // 1) Ensure we have a base ISO
-    // 2) Apply date picker (keep time)
-    // 3) Apply time editor (keep date)
-    let nextScheduledArrival = draft.scheduledArrival || new Date().toISOString();
-
-    if (dateValue) {
-      nextScheduledArrival = updateIsoDateKeepTime(nextScheduledArrival, dateValue);
-    }
-
-    if (timeHm) {
-      nextScheduledArrival = updateIsoTimeKeepDate(nextScheduledArrival, timeHm, ampm);
-    }
-
-    // ✅ Derive scheduledDate + scheduledTime for new schema
-    const derived = isoToScheduledDateTime(nextScheduledArrival);
-    const scheduledDate = dateValue || derived.scheduledDate;
-    const scheduledTime = timeHm ? timeDerived : derived.scheduledTime;
-
-    const updated: Job = {
-      ...draft,
-      status: nextStatus,
-      time: timeDerived || draft.time,
-      scheduledArrival: nextScheduledArrival,
-
-      // ✅ New truth helpers stored
-      scheduledDate,
-      scheduledTime,
-
-      // ✅ Truth fields stored (full strings)
-      pickupAddress: pickupAddress.trim(),
-      dropoffAddress: dropoffAddress.trim(),
-
-      // ✅ Display label (short)
-      fromTo: composedFromTo,
-    };
-
-    const evaluated = evaluateJobWarnings(updated);
-
-    // ✅ UI updates instantly
-    onUpdateJob(evaluated);
-
-    // ✅ Firestore becomes source of truth (fixes refresh snapback)
+    setSaving(true);
     try {
-      const id = evaluated.jobId || (evaluated as any).id;
-      if (!id) throw new Error("Missing jobId/id for Firestore update");
+      const nextStatus = draft.status ?? JobStatus.READY;
+      const composedFromTo = makeFromToLabel(pickupAddress, dropoffAddress);
 
-      await updateDoc(doc(db, "jobs", id), {
-        scheduledArrival: evaluated.scheduledArrival || "",
-        scheduledDate: (evaluated as any).scheduledDate || "",
-        scheduledTime: (evaluated as any).scheduledTime || "",
-        time: evaluated.time || "",
+      let nextScheduledArrival = draft.scheduledArrival || new Date().toISOString();
 
-        pickupAddress: evaluated.pickupAddress || "",
-        dropoffAddress: evaluated.dropoffAddress || "",
-        fromTo: evaluated.fromTo || "",
+      if (dateValue) {
+        nextScheduledArrival = updateIsoDateKeepTime(nextScheduledArrival, dateValue);
+      }
 
-        notes: evaluated.notes || "",
-        flags: evaluated.flags || [],
-        status: evaluated.status || "READY",
+      if (timeHm) {
+        nextScheduledArrival = updateIsoTimeKeepDate(nextScheduledArrival, timeHm, ampm);
+      }
 
-        warningLevel: (evaluated as any).warningLevel || "none",
-        warningMuted: !!evaluated.warningMuted,
+      const derived = isoToScheduledDateTime(nextScheduledArrival);
+      const scheduledDate = dateValue || derived.scheduledDate;
+      const scheduledTime = timeHm ? timeDerived : derived.scheduledTime;
 
-        updatedAt: serverTimestamp(),
-      });
+      const updated: Job = {
+        ...draft,
+        status: nextStatus,
+        time: timeDerived || draft.time,
+        scheduledArrival: nextScheduledArrival,
+        scheduledDate,
+        scheduledTime,
+        pickupAddress: pickupAddress.trim(),
+        dropoffAddress: dropoffAddress.trim(),
+        fromTo: composedFromTo,
+      };
 
+      const evaluated = evaluateJobWarnings(updated);
+
+      // Determine jobId (must exist)
+      const jobId = evaluated.jobId || (evaluated as any).id;
+      if (!jobId) throw new Error("Job must have an ID");
+
+      // Optimistic UI update
+      onUpdateJob({ ...evaluated, jobId });
+
+      // Write to Firestore (merge: true preserves other fields)
+      await setDoc(
+        doc(db, "jobs", jobId),
+        {
+          jobId,
+          scheduledArrival: evaluated.scheduledArrival || "",
+          scheduledDate: (evaluated as any).scheduledDate || "",
+          scheduledTime: (evaluated as any).scheduledTime || "",
+          time: evaluated.time || "",
+          pickupAddress: evaluated.pickupAddress || "",
+          dropoffAddress: evaluated.dropoffAddress || "",
+          fromTo: evaluated.fromTo || "",
+          customerName: evaluated.customerName || "",
+          customerPhone: evaluated.customerPhone || "",
+          notes: evaluated.notes || "",
+          flags: evaluated.flags || [],
+          status: evaluated.status || "READY",
+          warningLevel: (evaluated as any).warningLevel || "none",
+          warningMuted: !!evaluated.warningMuted,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      // Close modal only on success
       onClose();
     } catch (err) {
-      console.error("Failed to update job in Firestore:", err);
-      // Keep modal open if you want; current behavior: stays open only if you remove onClose above
-      // For now we don't close on failure.
+      console.error("Failed to save job to Firestore:", err);
+      setSaving(false);
     }
   };
 
@@ -482,34 +475,47 @@ export default function JobDetailsModal({ job, onClose, onUpdateJob }: Props) {
         <div className="p-6 bg-white/5 border-t border-white/5 flex items-center gap-3">
           <button
             onClick={save}
-            className="flex-1 bg-sky-600 hover:bg-sky-500 text-white font-bold py-3 rounded-xl transition-all shadow-[0_0_20px_rgba(14,165,233,0.3)] flex items-center justify-center space-x-2"
+            disabled={saving}
+            className={`flex-1 font-bold py-3 rounded-xl transition-all flex items-center justify-center space-x-2 ${
+              saving
+                ? "bg-sky-600/50 cursor-not-allowed opacity-60"
+                : "bg-sky-600 hover:bg-sky-500 shadow-[0_0_20px_rgba(14,165,233,0.3)]"
+            } text-white`}
           >
             <Save size={18} />
-            <span>Save</span>
+            <span>{saving ? "Saving..." : "Save"}</span>
           </button>
 
           <button
             onClick={onClose}
-            className="px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/70 hover:text-white transition-all font-bold"
+            disabled={saving}
+            className={`px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl font-bold ${
+              saving ? "opacity-50 cursor-not-allowed" : "text-white/70 hover:text-white"
+            } transition-all`}
           >
             Cancel
           </button>
 
-          {/* ✅ NEW: Mute Toggle Button */}
           <button
             onClick={toggleWarningMute}
             type="button"
+            disabled={saving}
             className={`px-4 py-3 rounded-xl border transition-all font-bold text-xs uppercase tracking-wider ${
               draft.warningMuted
                 ? "bg-amber-500/10 border-amber-500/40 text-amber-400 hover:bg-amber-500/20"
                 : "bg-white/5 border-white/10 text-white/40 hover:text-white/80 hover:bg-white/10"
-            }`}
+            } ${saving ? "opacity-50 cursor-not-allowed" : ""}`}
             title="Hide/show warning badge for this job"
           >
             {draft.warningMuted ? "Warning Muted" : "Mute Warning"}
           </button>
 
-          <button className="p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white/60 hover:text-white transition-all">
+          <button
+            disabled={saving}
+            className={`p-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all ${
+              saving ? "opacity-50 cursor-not-allowed" : "text-white/60 hover:text-white"
+            }`}
+          >
             <MessageSquare size={20} />
           </button>
         </div>

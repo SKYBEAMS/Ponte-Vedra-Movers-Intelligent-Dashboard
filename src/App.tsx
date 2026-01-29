@@ -29,7 +29,7 @@ import AttentionDrawer from "./components/AttentionDrawer";
 import { pushHistory, popHistory } from "./utils/history";
 import { evaluateJobWarnings, evaluateJobWarningsResult } from "./utils/jobwarnings";
 
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
 import { db } from "./firebase";
 
 // ✅ NEW: Firestore employees hook
@@ -64,7 +64,11 @@ type AppStateSnapshot = {
 };
 
 const cloneTrucks = (trucks: Truck[]): Truck[] =>
-  trucks.map((t) => ({ ...t, crewIds: [...t.crewIds], jobIds: [...t.jobIds] }));
+  trucks.map((t) => ({
+    ...t,
+    assignedEmployeeIds: [...(t.assignedEmployeeIds ?? [])],
+    jobIds: [...(t.jobIds ?? [])],
+  }));
 
 const cloneJobs = (jobs: Job[]): Job[] =>
   jobs.map((j) => ({ ...j, flags: [...(j.flags || [])] }));
@@ -176,6 +180,31 @@ function coerceScheduledArrivalIso(data: any): { scheduledArrivalIso: string; ti
   };
 }
 
+const persistTruckAssignments = async (trucks: Truck[]) => {
+  const updates = trucks.map((t) => ({
+    id: t.id,
+    assignedEmployeeIds: t.assignedEmployeeIds,
+  }));
+
+  updates.forEach(async (u) => {
+    await updateDoc(doc(db, "trucks", u.id), {
+      assignedEmployeeIds: u.assignedEmployeeIds,
+      updatedAt: serverTimestamp(),
+    });
+  });
+};
+
+// ✅ NEW: Persist a single truck with all relevant fields
+async function persistTruck(truck: Truck) {
+  return updateDoc(doc(db, "trucks", truck.id), {
+    assignedEmployeeIds: truck.assignedEmployeeIds ?? [],
+    jobIds: truck.jobIds ?? [],
+    pointOfContactId: truck.pointOfContactId ?? null,
+    warningMuted: truck.warningMuted ?? false,
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export default function App() {
   const [trucks, setTrucks] = useState<Truck[]>(INITIAL_TRUCKS);
 
@@ -213,6 +242,28 @@ export default function App() {
 
   // ✅ NEW: Attention error state
   const [attentionError, setAttentionError] = useState<string | null>(null);
+
+  // 🔥 Firestore: trucks source of truth
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "trucks"), (snapshot) => {
+      const liveTrucks = snapshot.docs.map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          assignedEmployeeIds: data.assignedEmployeeIds ?? [],
+          jobIds: data.jobIds ?? [],
+          capacity: data.capacity ?? 3,
+        } as Truck;
+      });
+
+      setTrucks(liveTrucks);
+    }, (err) => {
+      console.error("trucks snapshot error", err);
+    });
+
+    return () => unsub();
+  }, []);
 
   // ✅ NEW: Optimistic count helpers
   const optimisticBump = (priority: "CRITICAL" | "HEADS_UP") => {
@@ -331,6 +382,9 @@ export default function App() {
       });
 
       setAllJobs(hydrateJobs(jobs));
+    }, (error) => {
+      // ✅ FIX: Added error handler for job snapshot
+      console.error("jobs snapshot error", error);
     });
 
     return () => unsub();
@@ -340,7 +394,7 @@ export default function App() {
   const [history, setHistory] = useState<AppStateSnapshot[]>([]);
 
   const rosterEmployees = useMemo(() => {
-    const assignedIds = new Set(trucks.flatMap((t) => t.crewIds));
+    const assignedIds = new Set(trucks.flatMap((t) => t.assignedEmployeeIds ?? []));
     return employeesSource.filter((e) => !assignedIds.has(e.id));
   }, [trucks, employeesSource]);
 
@@ -391,6 +445,17 @@ export default function App() {
     });
   }, [unassignedJobs, needsReviewIds]);
 
+  // ✅ NEW: Map employee ID to truck ID for quick lookup
+  const employeeTruckIdById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const t of trucks) {
+      for (const empId of (t.assignedEmployeeIds ?? [])) {
+        map[empId] = t.id;
+      }
+    }
+    return map;
+  }, [trucks]);
+
   const saveHistory = useCallback(() => {
     setHistory((prev) =>
       pushHistory(prev, {
@@ -400,11 +465,12 @@ export default function App() {
     );
   }, [trucks, allJobs]);
 
+  // ✅ NEW: Track last refresh for UI feedback only
+  const [lastRefreshAt, setLastRefreshAt] = useState<number>(0);
+
   const handleRefresh = useCallback(() => {
-    setHistory([]);
-    setTrucks(INITIAL_TRUCKS);
-    setAllJobs(hydrateJobs(INITIAL_JOBS).map(evaluateJobWarnings));
     setSelectedJob(null);
+    setLastRefreshAt(Date.now());
   }, []);
 
   const handleUndo = useCallback(() => {
@@ -476,70 +542,66 @@ export default function App() {
     [saveHistory, trucks]
   );
 
-  const handleDropOnTruck = useCallback((e: React.DragEvent, targetTruckId: string) => {
+  const handleDropOnTruck = useCallback(async (e: React.DragEvent, targetTruckId: string) => {
     const rawData = e.dataTransfer.getData("application/json");
     if (!rawData) return;
     const dragItem: DragItem = JSON.parse(rawData);
-
     if (dragItem.sourceTruckId === targetTruckId) return;
 
     saveHistory();
 
-    setTrucks((prevTrucks) => {
-      const nextTrucks = prevTrucks.map((t) => ({
-        ...t,
-        crewIds: [...t.crewIds],
-        jobIds: [...t.jobIds],
-      }));
+    const nextTrucks = trucks.map((t) => ({
+      ...t,
+      assignedEmployeeIds: [...(t.assignedEmployeeIds ?? [])],
+      jobIds: [...(t.jobIds ?? [])],
+    }));
 
-      const target = nextTrucks.find((t) => t.id === targetTruckId);
-      const source = dragItem.sourceTruckId
-        ? nextTrucks.find((t) => t.id === dragItem.sourceTruckId)
-        : null;
+    const target = nextTrucks.find((t) => t.id === targetTruckId);
+    const source = dragItem.sourceTruckId
+      ? nextTrucks.find((t) => t.id === dragItem.sourceTruckId)
+      : null;
 
-      if (!target) return prevTrucks;
+    if (!target) return;
 
-      if (dragItem.type === "employee") {
-        if (target.crewIds.length >= target.capacity) return prevTrucks;
+    if (dragItem.type === "employee") {
+      if ((target.assignedEmployeeIds ?? []).length >= target.capacity) return;
 
-        console.log("DROP EMP DEBUG", {
-          dragId: dragItem.id,
-          employeesSourceIds: employeesSource.map((e) => e.id),
-          targetTruckId,
-          beforeCrewIds: target.crewIds,
-        });
+      const exists = employeesSource.some((e) => e.id === dragItem.id);
+      if (!exists) return;
 
-        // ✅ Firestore safety: don't allow assigning an employee id that doesn't exist
-        const exists = employeesSource.some((e) => e.id === dragItem.id);
-        if (!exists) {
-           console.warn("Tried to assign unknown employee id:", dragItem.id);
-           return prevTrucks;
-        }
-
-        if (source) source.crewIds = source.crewIds.filter((id) => id !== dragItem.id);
-        if (!target.crewIds.includes(dragItem.id)) target.crewIds.push(dragItem.id);
-      } else {
-        if (source) source.jobIds = source.jobIds.filter((id) => id !== dragItem.id);
-        if (!target.jobIds.includes(dragItem.id)) target.jobIds.push(dragItem.id);
-
-        setAllJobs((prev) =>
-          prev.map((j) =>
-            j.id === dragItem.id
-              ? evaluateJobWarnings({
-                  ...j,
-                  status: JobStatus.ASSIGNED,
-                  assignedTruckId: targetTruckId,
-                })
-              : j
-          )
-        );
+      if (source) {
+        source.assignedEmployeeIds = (source.assignedEmployeeIds ?? []).filter((id) => id !== dragItem.id);
+      }
+      if (!(target.assignedEmployeeIds ?? []).includes(dragItem.id)) {
+        target.assignedEmployeeIds = [...(target.assignedEmployeeIds ?? []), dragItem.id];
+      }
+    } else {
+      if (source) {
+        source.jobIds = (source.jobIds ?? []).filter((id) => id !== dragItem.id);
+      }
+      if (!(target.jobIds ?? []).includes(dragItem.id)) {
+        target.jobIds = [...(target.jobIds ?? []), dragItem.id];
       }
 
-      return nextTrucks;
-    });
-  }, [saveHistory, employeesSource]);
+      setAllJobs((prev) =>
+        prev.map((j) =>
+          j.id === dragItem.id
+            ? evaluateJobWarnings({ ...j, status: JobStatus.ASSIGNED, assignedTruckId: targetTruckId })
+            : j
+        )
+      );
+    }
 
-  const handleDropOnRoster = (e: React.DragEvent) => {
+    setTrucks(nextTrucks);
+
+    // ✅ FIX: Persist AFTER updating arrays, only the trucks involved
+    persistTruck(target).catch(console.error);
+    if (source) {
+      persistTruck(source).catch(console.error);
+    }
+  }, [saveHistory, trucks, employeesSource]);
+
+  const handleDropOnRoster = useCallback(async (e: React.DragEvent) => {
     const rawData = e.dataTransfer.getData("application/json");
     if (!rawData) return;
     const dragItem: DragItem = JSON.parse(rawData);
@@ -547,20 +609,24 @@ export default function App() {
     if (dragItem.type !== "employee" || !dragItem.sourceTruckId) return;
 
     saveHistory();
-    setTrucks((prevTrucks) =>
-      prevTrucks.map((t) => {
-        if (t.id === dragItem.sourceTruckId) {
-          return {
-            ...t,
-            crewIds: t.crewIds.filter((id) => id !== dragItem.id),
-          };
-        }
-        return t;
-      })
-    );
-  };
 
-  const handleDropOnQueue = (e: React.DragEvent) => {
+    // ✅ FIX: Persist inline during map, with array defaults
+    setTrucks((prevTrucks) => {
+      return prevTrucks.map((t) => {
+        if (t.id !== dragItem.sourceTruckId) return t;
+        
+        const updated = {
+          ...t,
+          assignedEmployeeIds: (t.assignedEmployeeIds ?? []).filter((id) => id !== dragItem.id),
+        };
+        
+        persistTruck(updated).catch(console.error);
+        return updated;
+      });
+    });
+  }, [saveHistory]);
+
+  const handleDropOnQueue = useCallback(async (e: React.DragEvent) => {
     const rawData = e.dataTransfer.getData("application/json");
     if (!rawData) return;
     const dragItem: DragItem = JSON.parse(rawData);
@@ -569,53 +635,66 @@ export default function App() {
 
     saveHistory();
 
-    setTrucks((prevTrucks) =>
-      prevTrucks.map((t) => {
-        if (t.id === dragItem.sourceTruckId) {
-          return { ...t, jobIds: t.jobIds.filter((id) => id !== dragItem.id) };
-        }
-        return t;
-      })
-    );
+    // ✅ FIX: Persist inline during map, with array defaults
+    setTrucks((prevTrucks) => {
+      return prevTrucks.map((t) => {
+        if (t.id !== dragItem.sourceTruckId) return t;
+        
+        const updated = {
+          ...t,
+          jobIds: (t.jobIds ?? []).filter((id) => id !== dragItem.id),
+        };
+        
+        persistTruck(updated).catch(console.error);
+        return updated;
+      });
+    });
 
     setAllJobs((prev) =>
       prev.map((j) =>
         j.id === dragItem.id
-          ? evaluateJobWarnings({
-              ...j,
-              status: JobStatus.READY,
-              assignedTruckId: undefined,
-            })
+          ? evaluateJobWarnings({ ...j, status: JobStatus.READY, assignedTruckId: undefined })
           : j
       )
     );
-  };
+  }, [saveHistory]);
 
-  const addJob = () => {
-    saveHistory();
+  const addJob = async () => {
+    const jobId = `j-${Date.now()}`;
 
     const baseNewJob: Job = {
-      id: `j-${Date.now()}`,
+      id: jobId,
+      jobId,
+      source: "dashboard",
       time: "09:00 AM",
       customerName: "",
       customerPhone: "",
-
       pickupAddress: "",
       dropoffAddress: "",
       fromTo: "",
-
       flags: [],
       notes: "Please update job details.",
       status: JobStatus.READY,
       scheduledArrival: new Date().toISOString(),
-
-      // keep fields present so UI never freaks out
       warning: false,
       warningLevel: "none",
+      warningMuted: false,
     };
 
     const newJob = evaluateJobWarnings(baseNewJob);
-    setAllJobs((prev) => [...prev, newJob]);
+
+    await setDoc(
+      doc(db, "jobs", jobId),
+      {
+        ...newJob,
+        jobId,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    // Let onSnapshot bring it into allJobs; we can still open modal immediately:
     setSelectedJob(newJob);
   };
 
@@ -666,22 +745,46 @@ export default function App() {
     }
   };
 
-  // ✅ NEW: Action panel handlers
-  const handleEtaPing = () => {
-    console.log("ETA ping triggered");
-  };
+  // ✅ NEW: Action panel handlers (NOW: Firestore event emitters)
+  const handleEtaPing = async () => {
+  console.log("APP: ETA fired");
+  await setDoc(doc(collection(db, "dispatch_actions")), {
+    type: "ETA_PING_REQUESTED",
+    status: "NEW",
+    createdAt: serverTimestamp(),
+    source: "ui",
+  });
+};
 
-  const handleSupplies = () => {
-    console.log("Supplies check triggered");
-  };
+  const handleSupplies = async () => {
+  console.log("APP: Supplies fired");
+  await setDoc(doc(collection(db, "dispatch_actions")), {
+    type: "SUPPLIES_CHECK_REQUESTED",
+    status: "NEW",
+    createdAt: serverTimestamp(),
+    source: "ui",
+  });
+};
 
-  const handleBroadcast = () => {
-    console.log("Broadcast note triggered");
-  };
+const handleBroadcast = async () => {
+  console.log("APP: Broadcast fired");
+  await setDoc(doc(collection(db, "dispatch_actions")), {
+    type: "BROADCAST_NOTE_REQUESTED",
+    status: "NEW",
+    createdAt: serverTimestamp(),
+    source: "ui",
+  });
+};
 
-  const handleNewJob = () => {
-    console.log("New job triggered");
-  };
+const handleNewJob = async () => {
+  console.log("APP: NewJob fired");
+  await setDoc(doc(collection(db, "dispatch_actions")), {
+    type: "NEW_JOB_REQUESTED",
+    status: "NEW",
+    createdAt: serverTimestamp(),
+    source: "ui",
+  });
+};
 
   const handleNeedsAttention = () => {
     setAttentionPriority("CRITICAL");
@@ -712,7 +815,12 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen bg-slate-950 text-white tron-grid overflow-hidden relative">
-      <TopNav onUndo={handleUndo} canUndo={history.length > 0} onRefresh={handleRefresh} />
+      <TopNav 
+        onUndo={handleUndo} 
+        canUndo={history.length > 0} 
+        onRefresh={handleRefresh}
+        lastRefreshAt={lastRefreshAt}
+      />
 
       <main className="flex-1 flex overflow-hidden pt-16 p-6 space-x-6">
         {/* Left Column: Employees (Roster) */}
@@ -755,7 +863,7 @@ export default function App() {
                 employee={emp}
                 onDragStart={handleDragStart}
                 onDragEnd={handleDragEnd}
-                onClick={() => openEmployeeModal(emp, null)}
+                onClick={() => openEmployeeModal(emp, employeeTruckIdById[emp.id] ?? null)}
               />
             ))}
           </div>
@@ -766,7 +874,7 @@ export default function App() {
           <div className="grid grid-cols-3 gap-6">
             {trucks.map((truck) => {
               const crew = employeesSource.filter((e) =>
-                truck.crewIds.includes(e.id)
+                truck.assignedEmployeeIds.includes(e.id)
               );
 
               // 3) App.tsx: make the highlight use the override
@@ -896,10 +1004,10 @@ export default function App() {
             )}
 
             {/* ✅ Today Queue */}
-            <div className="mb-2">
-              <div className="flex items-center gap-2 px-2 mb-2">
-                <Clock size={14} style={{ color: QUEUE_STYLES.today.color }} />
-                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: QUEUE_STYLES.today.color }}>
+            <div className="q-section">
+              <div className="q-header">
+                <Clock size={14} className="q-icon" style={{ color: QUEUE_STYLES.today.color }} />
+                <span className="q-title" style={{ color: QUEUE_STYLES.today.color }}>
                   Today Queue
                 </span>
                 <span className="text-[10px] px-2 py-0.5 rounded border" style={{ backgroundColor: `${QUEUE_STYLES.today.color}20`, color: QUEUE_STYLES.today.color, borderColor: `${QUEUE_STYLES.today.color}50` }}>
@@ -907,24 +1015,26 @@ export default function App() {
                 </span>
               </div>
 
-              {todayQueueJobs.map((job) => (
-                <JobCard
-                  key={job.id}
-                  job={job}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                  onViewDetails={setSelectedJob}
-                  onDelete={deleteJob}
-                  onToggleWarningMute={toggleJobWarningMute}
-                />
-              ))}
+              <div className="q-list">
+                {todayQueueJobs.map((job) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onViewDetails={setSelectedJob}
+                    onDelete={deleteJob}
+                    onToggleWarningMute={toggleJobWarningMute}
+                  />
+                ))}
+              </div>
             </div>
 
             {/* ✅ Needs Review */}
-            <div className="mb-2">
-              <div className="flex items-center gap-2 px-2 mb-2">
-                <AlertTriangle size={14} style={{ color: QUEUE_STYLES.needsReview.color }} />
-                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: QUEUE_STYLES.needsReview.color }}>
+            <div className="q-section">
+              <div className="q-header">
+                <AlertTriangle size={14} className="q-icon" style={{ color: QUEUE_STYLES.needsReview.color }} />
+                <span className="q-title" style={{ color: QUEUE_STYLES.needsReview.color }}>
                   Needs Review
                 </span>
                 <span className="text-[10px] px-2 py-0.5 rounded border" style={{ backgroundColor: `${QUEUE_STYLES.needsReview.color}20`, color: QUEUE_STYLES.needsReview.color, borderColor: `${QUEUE_STYLES.needsReview.color}50` }}>
@@ -932,24 +1042,26 @@ export default function App() {
                 </span>
               </div>
 
-              {needsReviewJobs.map((job) => (
-                <JobCard
-                  key={job.id}
-                  job={job}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                  onViewDetails={setSelectedJob}
-                  onDelete={deleteJob}
-                  onToggleWarningMute={toggleJobWarningMute}
-                />
-              ))}
+              <div className="q-list">
+                {needsReviewJobs.map((job) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onViewDetails={setSelectedJob}
+                    onDelete={deleteJob}
+                    onToggleWarningMute={toggleJobWarningMute}
+                  />
+                ))}
+              </div>
             </div>
 
             {/* ✅ Waiting Queue */}
-            <div className="mb-2">
-              <div className="flex items-center gap-2 px-2 mb-2">
-                <Inbox size={14} style={{ color: QUEUE_STYLES.waiting.color }} />
-                <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: QUEUE_STYLES.waiting.color }}>
+            <div className="q-section q-waiting">
+              <div className="q-header">
+                <Inbox size={14} className="q-icon" style={{ color: QUEUE_STYLES.waiting.color }} />
+                <span className="q-title" style={{ color: QUEUE_STYLES.waiting.color }}>
                   Waiting Queue
                 </span>
                 <span className="text-[10px] px-2 py-0.5 rounded border" style={{ backgroundColor: `${QUEUE_STYLES.waiting.color}20`, color: QUEUE_STYLES.waiting.color, borderColor: `${QUEUE_STYLES.waiting.color}50` }}>
@@ -957,17 +1069,19 @@ export default function App() {
                 </span>
               </div>
 
-              {waitingQueueJobs.map((job) => (
-                <JobCard
-                  key={job.id}
-                  job={job}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                  onViewDetails={setSelectedJob}
-                  onDelete={deleteJob}
-                  onToggleWarningMute={toggleJobWarningMute}
-                />
-              ))}
+              <div className="q-list">
+                {waitingQueueJobs.map((job) => (
+                  <JobCard
+                    key={job.id}
+                    job={job}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onViewDetails={setSelectedJob}
+                    onDelete={deleteJob}
+                    onToggleWarningMute={toggleJobWarningMute}
+                  />
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -979,14 +1093,21 @@ export default function App() {
         <JobDetailsModal
           job={selectedJob}
           onClose={() => setSelectedJob(null)}
-          onUpdateJob={(updatedJob) => {
+          onUpdateJob={async (updatedJob) => {
             saveHistory();
-
-            // ✅ CENTRAL truth: stamp warnings before saving
             const finalJob = evaluateJobWarnings(updatedJob);
 
-            setAllJobs((prev) => prev.map((j) => (j.id === finalJob.id ? finalJob : j)));
-            setSelectedJob(finalJob);
+            await setDoc(
+              doc(db, "jobs", finalJob.id),
+              {
+                ...finalJob,
+                jobId: finalJob.jobId ?? finalJob.id,
+                updatedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+
+            setSelectedJob(finalJob); // optional; keeps modal showing latest
           }}
         />
       )}

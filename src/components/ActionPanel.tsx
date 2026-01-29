@@ -40,16 +40,44 @@ export default function ActionPanel({
     <div className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-white/10 bg-white/5">
       {/* Left: Actions */}
       <div className="flex items-center gap-2 flex-wrap">
-        <button className={btn} onClick={onEtaPing} type="button">
+        <button
+          className={btn}
+          onClick={() => {
+            console.log("ACTIONPANEL: ETA CLICK");
+            onEtaPing?.();
+          }}
+          type="button"
+        >
           ETA PING
         </button>
-        <button className={btn} onClick={onSupplies} type="button">
+        <button
+          className={btn}
+          onClick={() => {
+            console.log("ACTIONPANEL: SUPPLIES CLICK");
+            onSupplies?.();
+          }}
+          type="button"
+        >
           SUPPLIES
         </button>
-        <button className={btn} onClick={onBroadcast} type="button">
+        <button
+          className={btn}
+          onClick={() => {
+            console.log("ACTIONPANEL: BROADCAST CLICK");
+            onBroadcast?.();
+          }}
+          type="button"
+        >
           BROADCAST
         </button>
-        <button className={btn} onClick={onNewJob} type="button">
+        <button
+          className={btn}
+          onClick={() => {
+            console.log("ACTIONPANEL: NEW JOB CLICK");
+            onNewJob?.();
+          }}
+          type="button"
+        >
           NEW JOB
         </button>
         <button className={btn} onClick={onNeedsAttention} type="button">

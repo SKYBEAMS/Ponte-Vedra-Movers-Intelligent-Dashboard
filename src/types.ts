@@ -33,7 +33,7 @@ export interface Employee {
   name: string;
   initials: string;
   hasLicense: boolean;
-  phone: string;
+  phone?: string;
   rank: number;
 
   // if true, visually mark them as not available
@@ -49,6 +49,8 @@ export interface Employee {
 
   // ✅ check-in tracking
   checkInStatus?: CheckInStatus;
+  checkIn1SentAt?: string; // ISO
+  checkIn2SentAt?: string; // ISO
   lastCheckInSentAt?: string; // ISO
   lastCheckInReplyAt?: string; // ISO
 }
@@ -99,7 +101,6 @@ export interface Truck {
   capacity: number;
   fuelLevel: number;
   ready: boolean;
-  crewIds: string[];
   jobIds: string[];
 
   // Optional legacy warning state (keep for compatibility)
@@ -112,6 +113,9 @@ export interface Truck {
 
   // ✅ manual override for lead / point of contact
   pointOfContactId?: string | null;
+
+  assignedEmployeeIds: string[];
+  truckNumber: string;
 }
 
 /** Drag payload */

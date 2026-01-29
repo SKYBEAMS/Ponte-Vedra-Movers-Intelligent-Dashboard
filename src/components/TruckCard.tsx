@@ -46,7 +46,7 @@ export default function TruckCard({
   contactId = null,
 }: TruckCardProps) {
   console.log("TRUCK VIEW", truck.id, {
-    crewIds: truck.crewIds,
+    assignedEmployeeIds: truck.assignedEmployeeIds,
     crewResolved: crew.map((c) => c.id),
   });
 
