@@ -29,7 +29,7 @@ import AttentionDrawer from "./components/AttentionDrawer";
 import { pushHistory, popHistory } from "./utils/history";
 import { evaluateJobWarnings, evaluateJobWarningsResult } from "./utils/jobwarnings";
 
-import { collection, onSnapshot, doc, setDoc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, setDoc, serverTimestamp, updateDoc, addDoc } from "firebase/firestore";
 import { db } from "./firebase";
 
 // ✅ NEW: Firestore employees hook
@@ -243,6 +243,10 @@ export default function App() {
   // ✅ NEW: Attention error state
   const [attentionError, setAttentionError] = useState<string | null>(null);
 
+  // ✅ NEW: ETA modal state
+  const [isEtaModalOpen, setIsEtaModalOpen] = useState(false);
+  const [selectedTruckIds, setSelectedTruckIds] = useState<string[]>([]);
+
   // 🔥 Firestore: trucks source of truth
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "trucks"), (snapshot) => {
@@ -327,7 +331,6 @@ export default function App() {
       employeesError,
     });
   }, [fsEmployees.length, employeesLoading, employeesError]);
-
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "jobs"), (snapshot) => {
@@ -746,45 +749,40 @@ export default function App() {
   };
 
   // ✅ NEW: Action panel handlers (NOW: Firestore event emitters)
-  const handleEtaPing = async () => {
-  console.log("APP: ETA fired");
-  await setDoc(doc(collection(db, "dispatch_actions")), {
-    type: "ETA_PING_REQUESTED",
-    status: "NEW",
-    createdAt: serverTimestamp(),
-    source: "ui",
-  });
-};
+  const handleEtaPing = () => {
+    setSelectedTruckIds([]);     // reset selection each time
+    setIsEtaModalOpen(true);     // open popup
+  };
 
   const handleSupplies = async () => {
-  console.log("APP: Supplies fired");
-  await setDoc(doc(collection(db, "dispatch_actions")), {
-    type: "SUPPLIES_CHECK_REQUESTED",
-    status: "NEW",
-    createdAt: serverTimestamp(),
-    source: "ui",
-  });
-};
+    console.log("APP: Supplies fired");
+    await setDoc(doc(collection(db, "dispatch_actions")), {
+      type: "SUPPLIES_CHECK_REQUESTED",
+      status: "NEW",
+      createdAt: serverTimestamp(),
+      source: "ui",
+    });
+  };
 
-const handleBroadcast = async () => {
-  console.log("APP: Broadcast fired");
-  await setDoc(doc(collection(db, "dispatch_actions")), {
-    type: "BROADCAST_NOTE_REQUESTED",
-    status: "NEW",
-    createdAt: serverTimestamp(),
-    source: "ui",
-  });
-};
+  const handleBroadcast = async () => {
+    console.log("APP: Broadcast fired");
+    await setDoc(doc(collection(db, "dispatch_actions")), {
+      type: "BROADCAST_NOTE_REQUESTED",
+      status: "NEW",
+      createdAt: serverTimestamp(),
+      source: "ui",
+    });
+  };
 
-const handleNewJob = async () => {
-  console.log("APP: NewJob fired");
-  await setDoc(doc(collection(db, "dispatch_actions")), {
-    type: "NEW_JOB_REQUESTED",
-    status: "NEW",
-    createdAt: serverTimestamp(),
-    source: "ui",
-  });
-};
+  const handleNewJob = async () => {
+    console.log("APP: NewJob fired");
+    await setDoc(doc(collection(db, "dispatch_actions")), {
+      type: "NEW_JOB_REQUESTED",
+      status: "NEW",
+      createdAt: serverTimestamp(),
+      source: "ui",
+    });
+  };
 
   const handleNeedsAttention = () => {
     setAttentionPriority("CRITICAL");
@@ -801,6 +799,27 @@ const handleNewJob = async () => {
   const saveQuickNote = async (text: string) => {
     await addQuickNote(text);
   };
+
+  // ✅ NEW: Handle sending ETA ping with selected trucks
+  const handleSendEta = async () => {
+  if (selectedTruckIds.length === 0) return;
+
+  const actionGroupId = `ETA_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
+
+  await addDoc(collection(db, "dispatch_actions"), {
+    type: "ETA_PING_REQUESTED",
+    targetScope: "TRUCKS",
+    truckIds: selectedTruckIds,
+    status: "NEW",
+    actionGroupId,
+    requestedBy: null,
+    createdAt: serverTimestamp(),
+  });
+
+  setIsEtaModalOpen(false);
+  setSelectedTruckIds([]);
+};
+
 
   useEffect(() => {
     const unsub = subscribeAttentionCounts(
@@ -856,7 +875,6 @@ const handleNewJob = async () => {
                 </span>
               </div>
             )}
-
             {rosterEmployees.map((emp) => (
               <EmployeeCard
                 key={emp.id}
@@ -1089,14 +1107,13 @@ const handleNewJob = async () => {
 
       <div className="fixed bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-sky-500 to-transparent opacity-50 shadow-[0_-4px_20px_rgba(14,165,233,0.5)]"></div>
 
-            {selectedJob && (
+      {selectedJob && (
         <JobDetailsModal
           job={selectedJob}
           onClose={() => setSelectedJob(null)}
           onUpdateJob={async (updatedJob) => {
             saveHistory();
             const finalJob = evaluateJobWarnings(updatedJob);
-
             await setDoc(
               doc(db, "jobs", finalJob.id),
               {
@@ -1107,7 +1124,7 @@ const handleNewJob = async () => {
               { merge: true }
             );
 
-            setSelectedJob(finalJob); // optional; keeps modal showing latest
+            setSelectedJob(finalJob);
           }}
         />
       )}
@@ -1117,17 +1134,14 @@ const handleNewJob = async () => {
         open={employeeModal.open}
         employee={employeeModal.employee}
         onClose={closeEmployeeModal}
-        // ✅ NEW: pass the setter
         onSetPointOfContact={(empId) =>
           employeeModal.truckId && setPointOfContact(employeeModal.truckId, empId)
         }
         isPointOfContact={
-          // Calculate if this employee is currently the PoC for the truck they were clicked on
           !!employeeModal.truckId &&
           trucks.find((t) => t.id === employeeModal.truckId)?.pointOfContactId ===
             employeeModal.employee?.id
         }
-        // ✅ NEW: pass notes and handler
         notes={employeeNotes}
         onAddNote={handleAddEmployeeNote}
       />
@@ -1147,6 +1161,40 @@ const handleNewJob = async () => {
         onOptimisticAdd={optimisticBump}
         onOptimisticRemove={optimisticDrop}
       />
+
+      {/* ✅ NEW: ETA Modal */}
+      {isEtaModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsEtaModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Select trucks for ETA</h3>
+            {trucks.map((truck) => (
+              <label key={truck.id} style={{ display: "block" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTruckIds.includes(truck.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedTruckIds([...selectedTruckIds, truck.id]);
+                    } else {
+                      setSelectedTruckIds(
+                        selectedTruckIds.filter((id) => id !== truck.id)
+                      );
+                    }
+                  }}
+                />
+                {truck.name || truck.id}
+              </label>
+            ))}
+
+            <div className="modal-actions">
+              <button onClick={() => setIsEtaModalOpen(false)}>Cancel</button>
+              <button onClick={handleSendEta} disabled={selectedTruckIds.length === 0}>
+                Send ETA
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
