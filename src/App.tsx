@@ -200,10 +200,24 @@ async function persistTruck(truck: Truck) {
     assignedEmployeeIds: truck.assignedEmployeeIds ?? [],
     jobIds: truck.jobIds ?? [],
     pointOfContactId: truck.pointOfContactId ?? null,
+    leadPhone: truck.leadPhone ?? null,
     warningMuted: truck.warningMuted ?? false,
     updatedAt: serverTimestamp(),
   });
 }
+
+// ✅ NEW: Handle fuel level updates
+const handleFuelUpdate = async (truckId: string, fuelLevel: number) => {
+  console.log("PARENT onFuelUpdate", truckId, fuelLevel);
+  try {
+    await updateDoc(doc(db, "trucks", truckId), {
+      fuelLevel,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    console.error("Failed to update fuel level:", err);
+  }
+};
 
 export default function App() {
   const [trucks, setTrucks] = useState<Truck[]>(INITIAL_TRUCKS);
@@ -246,6 +260,9 @@ export default function App() {
   // ✅ NEW: ETA modal state
   const [isEtaModalOpen, setIsEtaModalOpen] = useState(false);
   const [selectedTruckIds, setSelectedTruckIds] = useState<string[]>([]);
+
+  // ✅ NEW: Supplies modal state
+  const [isSuppliesModalOpen, setIsSuppliesModalOpen] = useState(false);
 
   // 🔥 Firestore: trucks source of truth
   useEffect(() => {
@@ -546,9 +563,12 @@ export default function App() {
   );
 
   const handleDropOnTruck = useCallback(async (e: React.DragEvent, targetTruckId: string) => {
+    e.preventDefault();
+
     const rawData = e.dataTransfer.getData("application/json");
     if (!rawData) return;
     const dragItem: DragItem = JSON.parse(rawData);
+
     if (dragItem.sourceTruckId === targetTruckId) return;
 
     saveHistory();
@@ -566,19 +586,84 @@ export default function App() {
 
     if (!target) return;
 
-    if (dragItem.type === "employee") {
-      if ((target.assignedEmployeeIds ?? []).length >= target.capacity) return;
+    // ✅ Helper: Re-rank and pick best POC for a truck
+    const pickBestPoc = (truck: Truck) => {
+      const crew = employeesSource.filter((e) =>
+        (truck.assignedEmployeeIds ?? []).includes(e.id)
+      );
 
+      // ✅ FIX: Numeric rank sort (Higher number = Higher priority)
+      const sortedByCrew = [...crew].sort((a, b) => {
+        const rankA = Number(a.rank ?? 0);
+        const rankB = Number(b.rank ?? 0);
+        return rankB - rankA; // Descending order
+      });
+
+      const bestWithPhone = sortedByCrew.find((e) => (e.phone ?? "").trim().length > 0);
+      return {
+        pointOfContactId: bestWithPhone?.id ?? null,
+        leadPhone: bestWithPhone?.phone ?? null,
+      };
+    };
+
+    if (dragItem.type === "employee") {
+      // Guarded capacity check
+      if (target.capacity && (target.assignedEmployeeIds ?? []).length >= target.capacity) return;
+
+      // Verify employee exists
       const exists = employeesSource.some((e) => e.id === dragItem.id);
       if (!exists) return;
 
+      // Remove from source
       if (source) {
-        source.assignedEmployeeIds = (source.assignedEmployeeIds ?? []).filter((id) => id !== dragItem.id);
+        source.assignedEmployeeIds = (source.assignedEmployeeIds ?? []).filter(
+          (id) => id !== dragItem.id
+        );
       }
+
+      // Add to target
       if (!(target.assignedEmployeeIds ?? []).includes(dragItem.id)) {
         target.assignedEmployeeIds = [...(target.assignedEmployeeIds ?? []), dragItem.id];
       }
+
+      // Re-pick POC for target
+      const targetPoc = pickBestPoc(target);
+      target.pointOfContactId = targetPoc.pointOfContactId;
+      target.leadPhone = targetPoc.leadPhone;
+
+      // Re-pick POC for source (if exists)
+      if (source) {
+        const sourcePoc = pickBestPoc(source);
+        source.pointOfContactId = sourcePoc.pointOfContactId;
+        source.leadPhone = sourcePoc.leadPhone;
+      }
+
+      // Update UI FIRST
+      setTrucks(nextTrucks);
+
+      // Firestore Background Sync
+      Promise.all([
+        updateDoc(doc(db, "trucks", targetTruckId), {
+          assignedEmployeeIds: target.assignedEmployeeIds,
+          pointOfContactId: target.pointOfContactId,
+          leadPhone: target.leadPhone,
+          updatedAt: serverTimestamp(),
+        }),
+        ...(source
+          ? [
+              updateDoc(doc(db, "trucks", source.id), {
+                assignedEmployeeIds: source.assignedEmployeeIds,
+                pointOfContactId: source.pointOfContactId,
+                leadPhone: source.leadPhone,
+                updatedAt: serverTimestamp(),
+              }),
+            ]
+          : []),
+      ]).catch((err) => {
+        console.error("Failed to persist truck assignments:", err);
+      });
     } else {
+      // Job drop logic
       if (source) {
         source.jobIds = (source.jobIds ?? []).filter((id) => id !== dragItem.id);
       }
@@ -593,14 +678,27 @@ export default function App() {
             : j
         )
       );
-    }
 
-    setTrucks(nextTrucks);
+      // Update UI FIRST
+      setTrucks(nextTrucks);
 
-    // ✅ FIX: Persist AFTER updating arrays, only the trucks involved
-    persistTruck(target).catch(console.error);
-    if (source) {
-      persistTruck(source).catch(console.error);
+      // Firestore Background Sync
+      Promise.all([
+        updateDoc(doc(db, "trucks", targetTruckId), {
+          jobIds: target.jobIds,
+          updatedAt: serverTimestamp(),
+        }),
+        ...(source
+          ? [
+              updateDoc(doc(db, "trucks", source.id), {
+                jobIds: source.jobIds,
+                updatedAt: serverTimestamp(),
+              }),
+            ]
+          : []),
+      ]).catch((err) => {
+        console.error("Failed to persist job assignments:", err);
+      });
     }
   }, [saveHistory, trucks, employeesSource]);
 
@@ -621,6 +719,9 @@ export default function App() {
         const updated = {
           ...t,
           assignedEmployeeIds: (t.assignedEmployeeIds ?? []).filter((id) => id !== dragItem.id),
+          // ✅ NEW: Clear POC and leadPhone if unassigning the current POC
+          pointOfContactId: t.pointOfContactId === dragItem.id ? null : t.pointOfContactId,
+          leadPhone: t.pointOfContactId === dragItem.id ? null : t.leadPhone,
         };
         
         persistTruck(updated).catch(console.error);
@@ -754,14 +855,9 @@ export default function App() {
     setIsEtaModalOpen(true);     // open popup
   };
 
-  const handleSupplies = async () => {
-    console.log("APP: Supplies fired");
-    await setDoc(doc(collection(db, "dispatch_actions")), {
-      type: "SUPPLIES_CHECK_REQUESTED",
-      status: "NEW",
-      createdAt: serverTimestamp(),
-      source: "ui",
-    });
+  const handleSupplies = () => {
+    setSelectedTruckIds([]);          // start fresh selection
+    setIsSuppliesModalOpen(true);     // open supplies popup
   };
 
   const handleBroadcast = async () => {
@@ -800,26 +896,46 @@ export default function App() {
     await addQuickNote(text);
   };
 
+  // ✅ NEW: Handle sending supplies check with selected trucks
+  const handleSendSupplies = async () => {
+    if (selectedTruckIds.length === 0) return;
+
+    const actionGroupId = `SUPPLY_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
+
+    await addDoc(collection(db, "dispatch_actions"), {
+      type: "SUPPLIES_CHECK_REQUESTED",
+      targetScope: "TRUCKS",
+      truckIds: selectedTruckIds,
+      status: "NEW",
+      actionGroupId,
+      requestedBy: null,
+      createdAt: serverTimestamp(),
+      source: "ui",
+    });
+
+    setIsSuppliesModalOpen(false);
+    setSelectedTruckIds([]);
+  };
+
   // ✅ NEW: Handle sending ETA ping with selected trucks
   const handleSendEta = async () => {
-  if (selectedTruckIds.length === 0) return;
+    if (selectedTruckIds.length === 0) return;
 
-  const actionGroupId = `ETA_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
+    const actionGroupId = `ETA_${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}`;
 
-  await addDoc(collection(db, "dispatch_actions"), {
-    type: "ETA_PING_REQUESTED",
-    targetScope: "TRUCKS",
-    truckIds: selectedTruckIds,
-    status: "NEW",
-    actionGroupId,
-    requestedBy: null,
-    createdAt: serverTimestamp(),
-  });
+    await addDoc(collection(db, "dispatch_actions"), {
+      type: "ETA_PING_REQUESTED",
+      targetScope: "TRUCKS",
+      truckIds: selectedTruckIds,
+      status: "NEW",
+      actionGroupId,
+      requestedBy: null,
+      createdAt: serverTimestamp(),
+    });
 
-  setIsEtaModalOpen(false);
-  setSelectedTruckIds([]);
-};
-
+    setIsEtaModalOpen(false);
+    setSelectedTruckIds([]);
+  };
 
   useEffect(() => {
     const unsub = subscribeAttentionCounts(
@@ -841,7 +957,7 @@ export default function App() {
         lastRefreshAt={lastRefreshAt}
       />
 
-      <main className="flex-1 flex overflow-hidden pt-16 p-6 space-x-6">
+      <main className="flex-1 flex overflow-hidden pt-24 p-6 space-x-6">
         {/* Left Column: Employees (Roster) */}
         <div className="w-[300px] flex flex-col">
           <div className="flex items-center justify-between mb-4 px-2">
@@ -929,6 +1045,7 @@ export default function App() {
                   onEmployeeClick={(emp, truckId) => openEmployeeModal(emp, truckId)}
                   onViewJobDetails={setSelectedJob}
                   onToggleTruckMute={toggleTruckWarningMute}
+                  onFuelUpdate={handleFuelUpdate}
                 />
               );
             })}
@@ -1190,6 +1307,40 @@ export default function App() {
               <button onClick={() => setIsEtaModalOpen(false)}>Cancel</button>
               <button onClick={handleSendEta} disabled={selectedTruckIds.length === 0}>
                 Send ETA
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ NEW: Supplies Modal */}
+      {isSuppliesModalOpen && (
+        <div className="modal-backdrop" onClick={() => setIsSuppliesModalOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Select trucks for supplies check</h3>
+            {trucks.map((truck) => (
+              <label key={truck.id} style={{ display: "block" }}>
+                <input
+                  type="checkbox"
+                  checked={selectedTruckIds.includes(truck.id)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedTruckIds([...selectedTruckIds, truck.id]);
+                    } else {
+                      setSelectedTruckIds(
+                        selectedTruckIds.filter((id) => id !== truck.id)
+                      );
+                    }
+                  }}
+                />
+                {truck.name || truck.id}
+              </label>
+            ))}
+
+            <div className="modal-actions">
+              <button onClick={() => setIsSuppliesModalOpen(false)}>Cancel</button>
+              <button onClick={handleSendSupplies} disabled={selectedTruckIds.length === 0}>
+                Send Supplies Check
               </button>
             </div>
           </div>
